@@ -1,0 +1,8 @@
+config.py
+*.pyc
+__pycache__/
+*.db
+*.docx
+*.pptx
+_temp_escribia.jpg
+.env
