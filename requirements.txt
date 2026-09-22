@@ -1,0 +1,5 @@
+requests
+Pillow
+python-docx
+python-pptx
+streamlit
