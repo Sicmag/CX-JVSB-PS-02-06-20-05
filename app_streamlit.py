@@ -16,11 +16,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 import streamlit as st
 
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-except Exception:
-    from config import GEMINI_API_KEY, GROQ_API_KEY
+
 
 
 # ============ CONFIGURACIÓN ============
