@@ -1,7 +1,7 @@
 """
 EscribIA - Versión web (Streamlit)
-Para la sustentación: se despliega en Streamlit Cloud y se accede desde
-cualquier navegador con un link público.
+Genera documentos digitales a partir de fotos de apuntes manuscritos.
+Usa Groq como proveedor principal (con Gemini como respaldo opcional).
 """
 
 import base64
@@ -15,18 +15,47 @@ from docx import Document
 from pptx import Presentation
 from pptx.util import Inches, Pt
 
-from config import GEMINI_API_KEY, GROQ_API_KEY
+
+# ============ LEER CLAVES (tolerante a fallos) ============
+
+def _leer_clave(nombre):
+    """Intenta leer una clave desde Secrets o config.py sin crashear."""
+    try:
+        return st.secrets[nombre]
+    except Exception:
+        pass
+    try:
+        import config
+        return getattr(config, nombre)
+    except Exception:
+        return None
+
+
+GEMINI_API_KEY = _leer_clave("GEMINI_API_KEY")
+GROQ_API_KEY = _leer_clave("GROQ_API_KEY")
+
+# Verificar que al menos una clave exista
+if not GEMINI_API_KEY and not GROQ_API_KEY:
+    st.error(
+        "⚠️ No hay ninguna API key configurada. "
+        "Agrega GEMINI_API_KEY o GROQ_API_KEY en los Secrets de Streamlit."
+    )
+    st.stop()
+
+# Si Gemini falta o está mal formada, la ignoramos
+if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("AIzaSy"):
+    GEMINI_API_KEY = None  # formato inválido, se ignora
 
 
 # ============ CONFIGURACIÓN ============
 
 MODELO_GEMINI = "gemini-3.6-flash"
+MODELO_GROQ = "qwen/qwen3.8-27b"
+
 URL_GEMINI = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{MODELO_GEMINI}:generateContent?key={GEMINI_API_KEY}"
+    f"{MODELO_GEMINI}:generateContent"
 )
-
-MODELO_GROQ = "qwen/qwen3.8-27b"
 URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
 
 
@@ -38,7 +67,7 @@ usa guiones para listas. Devuelve SOLO el texto, sin markdown."""
 PROMPT_PPT = """Convierte este apunte manuscrito en diapositivas con explicaciones.
 Formato EXACTO:
 TITULO: <título corto>
-EXPLICACION: <1-2 frases explicando el tema, sin inventar información>
+EXPLICACION: <1-2 frases explicando el tema>
 - punto 1
 - punto 2
 ---
@@ -46,8 +75,7 @@ TITULO: <otro título>
 EXPLICACION: <explicación>
 - punto 1
 ---
-Entre 4 y 8 diapositivas, 3-5 puntos cada una, puntos de máximo 12 palabras.
-Sin asteriscos ni markdown."""
+Entre 4 y 8 diapositivas, 3-5 puntos cada una. Sin asteriscos."""
 
 
 PROMPT_RESUMEN = """Crea un resumen corto (máx 300 palabras) del apunte.
@@ -57,26 +85,10 @@ y termina con 3 preguntas de repaso. Sin markdown."""
 
 # ============ MOTOR DE IA ============
 
-def _gemini(imagen_b64, mime, prompt):
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": mime, "data": imagen_b64}},
-            ]
-        }]
-    }
-    for intento in range(3):
-        r = requests.post(URL_GEMINI, json=payload, timeout=120)
-        if r.status_code == 200:
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        if r.status_code == 503:
-            continue
-        raise RuntimeError(f"Gemini error {r.status_code}")
-    raise RuntimeError("Gemini saturado tras 3 intentos.")
-
-
 def _groq(imagen_b64, mime, prompt):
+    """Llama a Groq (proveedor principal)."""
+    if not GROQ_API_KEY:
+        raise RuntimeError("No hay clave de Groq configurada.")
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     payload = {
         "model": MODELO_GROQ,
@@ -92,16 +104,48 @@ def _groq(imagen_b64, mime, prompt):
     }
     r = requests.post(URL_GROQ, headers=headers, json=payload, timeout=120)
     if r.status_code != 200:
-        raise RuntimeError(f"Groq error {r.status_code}")
+        raise RuntimeError(f"Groq error {r.status_code}: {r.text[:200]}")
     return r.json()["choices"][0]["message"]["content"]
 
 
+def _gemini(imagen_b64, mime, prompt):
+    """Llama a Gemini (proveedor secundario)."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("Gemini no está disponible.")
+    url = f"{URL_GEMINI}?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime, "data": imagen_b64}},
+            ]
+        }]
+    }
+    r = requests.post(url, json=payload, timeout=120)
+    if r.status_code != 200:
+        raise RuntimeError(f"Gemini error {r.status_code}")
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
 def procesar(imagen_b64, mime, prompt):
-    """Intenta Gemini. Si falla, cae a Groq. Devuelve (texto, proveedor)."""
-    try:
-        return _gemini(imagen_b64, mime, prompt), "Gemini"
-    except Exception:
-        return _groq(imagen_b64, mime, prompt), "Groq"
+    """Intenta con Groq primero. Si falla, prueba Gemini."""
+    errores = []
+
+    # Intento 1: Groq
+    if GROQ_API_KEY:
+        try:
+            return _groq(imagen_b64, mime, prompt), "Groq"
+        except Exception as e:
+            errores.append(f"Groq: {e}")
+
+    # Intento 2: Gemini (si tiene formato válido)
+    if GEMINI_API_KEY:
+        try:
+            return _gemini(imagen_b64, mime, prompt), "Gemini"
+        except Exception as e:
+            errores.append(f"Gemini: {e}")
+
+    raise RuntimeError(" | ".join(errores) or "Sin proveedores disponibles.")
 
 
 # ============ GENERADORES DE ARCHIVOS ============
@@ -118,7 +162,6 @@ def docx_bytes(texto, titulo):
 
 
 def parsear_slides(texto):
-    """Convierte el texto estructurado en lista de diapositivas."""
     slides = []
     for bloque in texto.split("---"):
         lineas = [l.strip() for l in bloque.strip().split("\n") if l.strip()]
@@ -190,7 +233,7 @@ def pptx_bytes(texto):
     return buf.getvalue()
 
 
-# ============ INTERFAZ WEB ============
+# ============ INTERFAZ ============
 
 st.set_page_config(page_title="EscribIA", page_icon="📝", layout="centered")
 
@@ -234,7 +277,7 @@ if foto:
                 st.error(f"Error: {e}")
                 st.stop()
 
-        st.success(f"Procesado con {proveedor}")
+        st.success(f"✅ Procesado con {proveedor}")
         st.subheader("Contenido generado")
         st.text_area("Texto", texto, height=300, label_visibility="collapsed")
 
