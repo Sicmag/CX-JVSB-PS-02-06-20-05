@@ -2,15 +2,15 @@
 EscribIA - Versión web (Streamlit)
 Convierte fotos de apuntes manuscritos en documentos digitales con IA.
 
-Proveedores de IA:
+Proveedores:
   - Groq (principal)   → rápida y estable
   - Gemini (respaldo)  → cuando Groq falla
 
 Salidas:
-  - Solo lo anotado (transcripción literal)
-  - Documento completo de estudio (expandido con IA)
-  - Presentación de PowerPoint (con imágenes automáticas de Unsplash)
-  - Resumen corto
+  - Documento de Word (transcripción organizada)
+  - Documento completo de estudio (introducción, desarrollo, conceptos...)
+  - Presentación de PowerPoint
+  - Resumen corto con preguntas de repaso
 """
 
 import base64
@@ -42,11 +42,10 @@ def _leer_clave(nombre):
 
 GEMINI_API_KEY = _leer_clave("GEMINI_API_KEY")
 GROQ_API_KEY = _leer_clave("GROQ_API_KEY")
-UNSPLASH_ACCESS_KEY = _leer_clave("UNSPLASH_ACCESS_KEY")
 
 if not GEMINI_API_KEY and not GROQ_API_KEY:
     st.error(
-        "⚠️ No hay ninguna API key de IA configurada. "
+        "⚠️ No hay ninguna API key configurada. "
         "Agrega GEMINI_API_KEY o GROQ_API_KEY en los Secrets de Streamlit."
     )
     st.stop()
@@ -119,7 +118,7 @@ Reglas:
 PROMPT_PPT = """Convierte este apunte manuscrito en diapositivas con explicaciones.
 
 Formato EXACTO:
-TITULO: <título corto, máximo 6 palabras>
+TITULO: <título corto, máximo 8 palabras>
 EXPLICACION: <1-2 frases explicando el tema, sin inventar información>
 - punto 1
 - punto 2
@@ -201,30 +200,6 @@ def procesar(imagen_b64, mime, prompt):
     raise RuntimeError(" | ".join(errores) or "Sin proveedores disponibles.")
 
 
-# ============ BÚSQUEDA DE IMÁGENES ============
-
-def buscar_imagen_unsplash(query):
-    """Busca una imagen en Unsplash y devuelve la URL."""
-    if not UNSPLASH_ACCESS_KEY:
-        return None
-    try:
-        url = "https://api.unsplash.com/search/photos"
-        params = {
-            "query": query,
-            "per_page": 1,
-            "orientation": "landscape",
-            "client_id": UNSPLASH_ACCESS_KEY,
-        }
-        r = requests.get(url, params=params, timeout=15)
-        if r.status_code == 200:
-            data = r.json()
-            if data.get("results"):
-                return data["results"][0]["urls"]["regular"]
-    except Exception:
-        pass
-    return None
-
-
 # ============ GENERACIÓN DE DOCUMENTOS ============
 
 def docx_bytes(texto, titulo="Documento generado por EscribIA"):
@@ -293,72 +268,47 @@ def parsear_slides(texto):
     return slides
 
 
-def pptx_bytes(texto, con_imagenes=True):
-    """Genera una presentación con título, explicación, puntos e imágenes."""
+def pptx_bytes(texto):
+    """Genera una presentación con título, explicación y puntos."""
     slides = parsear_slides(texto)
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    # --- Portada ---
     portada = prs.slides.add_slide(prs.slide_layouts[0])
     portada.shapes.title.text = "Apuntes digitalizados"
     portada.placeholders[1].text = (
         f"EscribIA - {datetime.now().strftime('%d/%m/%Y')}"
     )
 
-    # --- Una diapositiva por sección ---
     for titulo, explicacion, puntos in slides:
         slide = prs.slides.add_slide(prs.slide_layouts[5])
         slide.shapes.title.text = titulo
 
-        # --- Imagen automática de Unsplash ---
-        tiene_imagen = False
-        if con_imagenes and UNSPLASH_ACCESS_KEY and titulo:
-            imagen_url = buscar_imagen_unsplash(titulo)
-            if imagen_url:
-                try:
-                    img_data = requests.get(imagen_url, timeout=15).content
-                    slide.shapes.add_picture(
-                        io.BytesIO(img_data),
-                        left=Inches(7.0), top=Inches(1.8),
-                        width=Inches(5.8),
-                    )
-                    tiene_imagen = True
-                except Exception:
-                    pass
-
-        # Ancho del texto: reducido si hay imagen, completo si no
-        ancho_texto = Inches(6.2) if tiene_imagen else Inches(12.1)
-
-        # Caja de explicación
         if explicacion:
-            caja_expl = slide.shapes.add_textbox(
-                Inches(0.6), Inches(1.6), ancho_texto, Inches(1.5)
+            caja = slide.shapes.add_textbox(
+                Inches(0.6), Inches(1.6), Inches(12.1), Inches(1.1)
             )
-            tf = caja_expl.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
+            caja.text_frame.word_wrap = True
+            p = caja.text_frame.paragraphs[0]
             p.text = explicacion
             p.font.size = Pt(16)
             p.font.italic = True
 
-        # Caja de puntos
         if puntos:
-            top_puntos = Inches(3.4) if explicacion else Inches(2.0)
-            caja_puntos = slide.shapes.add_textbox(
-                Inches(0.6), top_puntos, ancho_texto, Inches(4.0)
+            top = Inches(3.0) if explicacion else Inches(2.0)
+            caja2 = slide.shapes.add_textbox(
+                Inches(0.6), top, Inches(12.1), Inches(4.2)
             )
-            tf2 = caja_puntos.text_frame
-            tf2.word_wrap = True
+            caja2.text_frame.word_wrap = True
             for i, punto in enumerate(puntos):
                 if i == 0:
-                    par = tf2.paragraphs[0]
+                    par = caja2.text_frame.paragraphs[0]
                 else:
-                    par = tf2.add_paragraph()
+                    par = caja2.text_frame.add_paragraph()
                 par.text = f"•  {punto}"
-                par.font.size = Pt(18)
+                par.font.size = Pt(20)
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -377,16 +327,10 @@ st.divider()
 formato = st.radio(
     "¿Qué quieres generar?",
     [
-        "📝 Solo lo anotado (transcripción literal)",
-        "📚 Documento completo de estudio (con IA)",
+        "📄 Documento de Word",
+        "📚 Documento completo de estudio",
         "📊 Presentación de PowerPoint",
-        "📄 Resumen corto",
-    ],
-    captions=[
-        "Respeta el texto tal cual lo escribiste. Solo corrige ortografía y organiza en párrafos.",
-        "La IA amplía y estructura: introducción, secciones desarrolladas, conceptos clave, conclusión y preguntas.",
-        "Convierte el apunte en diapositivas con imágenes automáticas de Unsplash.",
-        "Resumen de máximo 300 palabras con viñetas de conceptos y preguntas de repaso.",
+        "📝 Resumen corto",
     ],
 )
 
@@ -410,7 +354,7 @@ if foto:
         # Elegir prompt según formato
         if "Documento completo" in formato:
             prompt = PROMPT_COMPLETO
-        elif "Solo lo anotado" in formato:
+        elif "Word" in formato:
             prompt = PROMPT_WORD
         elif "PowerPoint" in formato:
             prompt = PROMPT_PPT
@@ -434,27 +378,16 @@ if foto:
             nombre = f"escribia_documento_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             mime_dl = ("application/vnd.openxmlformats-officedocument."
                        "wordprocessingml.document")
-
-        elif "Solo lo anotado" in formato:
-            datos = docx_bytes(texto, "Apunte transcrito - EscribIA")
-            nombre = f"escribia_apunte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        elif "Word" in formato:
+            datos = docx_bytes(texto, "Documento generado por EscribIA")
+            nombre = f"escribia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             mime_dl = ("application/vnd.openxmlformats-officedocument."
                        "wordprocessingml.document")
-
         elif "PowerPoint" in formato:
-            if UNSPLASH_ACCESS_KEY:
-                with st.spinner("Buscando imágenes para las diapositivas..."):
-                    datos = pptx_bytes(texto, con_imagenes=True)
-            else:
-                st.info(
-                    "ℹ️ Para insertar imágenes automáticas, agrega "
-                    "UNSPLASH_ACCESS_KEY en los Secrets de Streamlit."
-                )
-                datos = pptx_bytes(texto, con_imagenes=False)
+            datos = pptx_bytes(texto)
             nombre = f"escribia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
             mime_dl = ("application/vnd.openxmlformats-officedocument."
                        "presentationml.presentation")
-
         else:
             datos = docx_bytes(texto, "Resumen de estudio - EscribIA")
             nombre = f"escribia_resumen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
