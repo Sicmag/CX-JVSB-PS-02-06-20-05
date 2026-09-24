@@ -43,12 +43,26 @@ LIMITE_GRATUITO = 7
 
 # ============ SUPABASE ============
 
-@st.cache_resource
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 supabase_client = get_supabase()
+
+
+def restaurar_sesion():
+    """Restaura la sesión guardada si existe (necesario tras reruns de Streamlit)."""
+    if st.session_state.get("access_token") and st.session_state.get("refresh_token"):
+        try:
+            supabase_client.auth.set_session(
+                st.session_state["access_token"],
+                st.session_state["refresh_token"],
+            )
+        except Exception:
+            pass
+
+
+restaurar_sesion()
 
 
 # ============ CONFIG IA ============
@@ -302,6 +316,7 @@ def pptx_bytes(texto):
 # ============ BD ============
 
 def obtener_usos(uid, mes):
+    restaurar_sesion()
     try:
         r = supabase_client.table("usage_logs").select("usage_count") \
             .eq("user_id", uid).eq("month_year", mes).execute()
@@ -311,6 +326,7 @@ def obtener_usos(uid, mes):
 
 
 def sumar_uso(uid, mes, actual):
+    restaurar_sesion()
     try:
         if actual == 0:
             supabase_client.table("usage_logs").insert({
@@ -325,6 +341,7 @@ def sumar_uso(uid, mes, actual):
 
 
 def guardar_conv(uid, tipo, texto):
+    restaurar_sesion()
     try:
         supabase_client.table("conversions").insert({
             "user_id": uid, "source_type": tipo, "generated_text": texto[:5000]
@@ -359,7 +376,12 @@ if st.session_state["user"] is None:
                     {"email": email, "password": pwd}
                 )
                 if resp.user:
-                    st.session_state["user"] = {"id": resp.user.id, "email": resp.user.email}
+                    st.session_state["user"] = {
+                        "id": resp.user.id,
+                        "email": resp.user.email,
+                    }
+                    st.session_state["access_token"] = resp.session.access_token
+                    st.session_state["refresh_token"] = resp.session.refresh_token
                     st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -413,6 +435,8 @@ with st.sidebar:
         except Exception:
             pass
         st.session_state["user"] = None
+        st.session_state.pop("access_token", None)
+        st.session_state.pop("refresh_token", None)
         st.rerun()
 
 st.title("📝 EscribIA")
