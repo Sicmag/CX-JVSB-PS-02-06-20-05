@@ -58,7 +58,7 @@ if not GEMINI_API_KEY and not GROQ_API_KEY:
 
 # ============ CONFIGURACIÓN ============
 
-MODELO_GEMINI = "gemini-2.5-flash"
+MODELO_GEMINI = "gemini-3.8-flash"
 MODELO_GROQ = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 URL_GEMINI = (
