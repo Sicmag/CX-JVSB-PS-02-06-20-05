@@ -1,14 +1,3 @@
-"""
-EscribIA - Versión web unificada con autenticación y base de datos.
-
-Incluye:
-  - Login y registro con Supabase (usando st-login-form)
-  - 4 formatos: Solo lo anotado, Documento completo, PowerPoint, Resumen
-  - Contador de usos mensuales (plan freemium, límite 7)
-  - Doble proveedor de IA: Groq (principal) + Gemini (respaldo)
-  - Imágenes automáticas de Unsplash para PowerPoint
-"""
-
 import base64
 import io
 from datetime import datetime
@@ -20,10 +9,9 @@ from docx import Document
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from supabase import create_client
-from st_login_form import login_form
 
 
-# ============ LECTURA DE CLAVES ============
+# ============ CLAVES ============
 
 def _leer_clave(nombre):
     try:
@@ -43,90 +31,63 @@ UNSPLASH_ACCESS_KEY = _leer_clave("UNSPLASH_ACCESS_KEY")
 SUPABASE_URL = _leer_clave("SUPABASE_URL")
 SUPABASE_KEY = _leer_clave("SUPABASE_KEY")
 
-if not GEMINI_API_KEY and not GROQ_API_KEY:
-    st.error("⚠️ No hay ninguna API key de IA configurada.")
+if not GROQ_API_KEY and not GEMINI_API_KEY:
+    st.error("Falta configurar claves de IA.")
     st.stop()
-
 if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("⚠️ Falta configurar SUPABASE_URL o SUPABASE_KEY.")
+    st.error("Falta configurar Supabase.")
     st.stop()
 
 LIMITE_GRATUITO = 7
 
 
-# ============ CONEXIÓN A SUPABASE ============
+# ============ SUPABASE ============
 
-try:
-    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.error(f"Error conectando a la base de datos: {e}")
-    st.stop()
+@st.cache_resource
+def get_supabase():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# ============ CONFIGURACIÓN DE IA ============
+supabase_client = get_supabase()
+
+
+# ============ CONFIG IA ============
 
 MODELO_GEMINI = "gemini-3.8-flash"
 MODELO_GROQ = "qwen/qwen3.8-27b"
 
-URL_GEMINI = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{MODELO_GEMINI}:generateContent"
-)
+URL_GEMINI = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELO_GEMINI}:generateContent"
 URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
 
 
-# --- Prompts ---
+PROMPT_WORD = """Transcribe este apunte manuscrito en español con fidelidad.
+Corrige ortografía, organiza en párrafos. Devuelve SOLO el texto, sin markdown."""
 
-PROMPT_WORD = """Eres un asistente que digitaliza apuntes manuscritos en español.
+PROMPT_COMPLETO = """Crea un documento de estudio del apunte.
 
-Transcribe con fidelidad, corrige ortografía, organiza en secciones con
-títulos claros, usa guiones para listas. Si hay partes ilegibles márcalas
-como [ilegible]. Devuelve SOLO el texto, sin markdown con asteriscos.
-Sé conciso: no agregues contenido extra."""
-
-PROMPT_COMPLETO = """Crea un documento de estudio breve y organizado a partir del apunte.
-
-Estructura exacta:
-
-TITULO: <título del tema, máximo 8 palabras>
-
+TITULO: <título>
 INTRODUCCION:
-<2 líneas sobre de qué trata>
-
+<2 líneas>
 DESARROLLO:
-SECCION: <nombre de la sección 1>
-<1 párrafo de 3-4 líneas>
-
-SECCION: <nombre de la sección 2>
-<1 párrafo de 3-4 líneas>
-
-SECCION: <nombre de la sección 3>
-<1 párrafo de 3-4 líneas>
-
+SECCION: <nombre>
+<párrafo>
+SECCION: <nombre>
+<párrafo>
 CONCEPTOS CLAVE:
-- <concepto 1: definición corta>
-- <concepto 2>
-- <concepto 3>
-- <concepto 4>
-
+- <concepto>
+- <concepto>
 CONCLUSION:
 <1-2 líneas>
-
 PREGUNTAS DE REPASO:
-1. <pregunta 1>
-2. <pregunta 2>
-3. <pregunta 3>
+1. <pregunta>
+2. <pregunta>
 
-Reglas:
-- Sé conciso. Total máximo: 500 palabras.
-- No inventes información que no esté en el apunte.
-- Sin asteriscos ni markdown."""
+Máximo 500 palabras. Sin asteriscos."""
 
-PROMPT_PPT = """Convierte este apunte en diapositivas.
+PROMPT_PPT = """Convierte el apunte en diapositivas.
 
-Formato EXACTO:
-TITULO: <título corto, máximo 6 palabras>
-EXPLICACION: <1 frase explicando el tema>
+TITULO: <título corto>
+EXPLICACION: <1 frase>
 - punto 1
 - punto 2
 - punto 3
@@ -136,129 +97,100 @@ EXPLICACION: <explicación>
 - punto 1
 ---
 
-Reglas:
-- Entre 4 y 6 diapositivas.
-- 3 puntos por diapositiva, máximo 10 palabras cada uno.
-- Sin asteriscos ni markdown."""
+Entre 4 y 6 diapositivas. Sin asteriscos."""
 
-PROMPT_RESUMEN = """Resume este apunte de forma MUY breve y directa.
+PROMPT_RESUMEN = """Resume el apunte muy breve.
 
-Formato exacto:
 RESUMEN:
-<un párrafo de 3-4 líneas>
-
+<párrafo de 3 líneas>
 CONCEPTOS:
-- <concepto 1>
-- <concepto 2>
-- <concepto 3>
-- <concepto 4>
-
+- <concepto>
+- <concepto>
 PREGUNTAS:
-1. <pregunta 1>
-2. <pregunta 2>
-3. <pregunta 3>
+1. <pregunta>
+2. <pregunta>
 
-Reglas:
-- Sé conciso. Total máximo: 200 palabras.
-- No inventes información.
-- Sin asteriscos ni markdown.
-- Empieza directo con "RESUMEN:"."""
+Máximo 200 palabras. Sin asteriscos."""
 
 
-# ============ MOTOR DE IA ============
+# ============ IA ============
 
-def _groq(imagen_b64, mime, prompt):
-    if not GROQ_API_KEY:
-        raise RuntimeError("Groq no disponible.")
+def _groq(b64, mime, prompt):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     payload = {
         "model": MODELO_GROQ,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:{mime};base64,{imagen_b64}"}},
-            ],
-        }],
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+        ]}],
         "temperature": 0.2,
         "max_tokens": 900,
     }
     r = requests.post(URL_GROQ, headers=headers, json=payload, timeout=120)
     if r.status_code != 200:
-        raise RuntimeError(f"Groq {r.status_code}: {r.text[:200]}")
+        raise RuntimeError(f"Groq {r.status_code}")
     return r.json()["choices"][0]["message"]["content"]
 
 
-def _gemini(imagen_b64, mime, prompt):
-    if not GEMINI_API_KEY:
-        raise RuntimeError("Gemini no disponible.")
+def _gemini(b64, mime, prompt):
     url = f"{URL_GEMINI}?key={GEMINI_API_KEY}"
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": mime, "data": imagen_b64}},
-            ]
-        }]
-    }
+    payload = {"contents": [{"parts": [
+        {"text": prompt},
+        {"inline_data": {"mime_type": mime, "data": b64}},
+    ]}]}
     r = requests.post(url, json=payload, timeout=120)
     if r.status_code != 200:
-        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:200]}")
+        raise RuntimeError(f"Gemini {r.status_code}")
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def procesar(imagen_b64, mime, prompt):
+def procesar(b64, mime, prompt):
     errores = []
     if GROQ_API_KEY:
         try:
-            return _groq(imagen_b64, mime, prompt), "Groq"
+            return _groq(b64, mime, prompt), "Groq"
         except Exception as e:
             errores.append(f"Groq: {e}")
     if GEMINI_API_KEY:
         try:
-            return _gemini(imagen_b64, mime, prompt), "Gemini"
+            return _gemini(b64, mime, prompt), "Gemini"
         except Exception as e:
             errores.append(f"Gemini: {e}")
-    raise RuntimeError(" | ".join(errores) or "Sin proveedores disponibles.")
+    raise RuntimeError(" | ".join(errores))
 
 
 # ============ UNSPLASH ============
 
-def buscar_imagen_unsplash(query):
+def buscar_imagen(query):
     if not UNSPLASH_ACCESS_KEY:
         return None
     try:
-        url = "https://api.unsplash.com/search/photos"
-        params = {
-            "query": query,
-            "per_page": 1,
-            "orientation": "landscape",
-            "client_id": UNSPLASH_ACCESS_KEY,
-        }
-        r = requests.get(url, params=params, timeout=15)
+        r = requests.get(
+            "https://api.unsplash.com/search/photos",
+            params={"query": query, "per_page": 1, "orientation": "landscape",
+                    "client_id": UNSPLASH_ACCESS_KEY},
+            timeout=15,
+        )
         if r.status_code == 200:
-            data = r.json()
-            if data.get("results"):
-                return data["results"][0]["urls"]["regular"]
+            res = r.json().get("results", [])
+            if res:
+                return res[0]["urls"]["regular"]
     except Exception:
         pass
     return None
 
 
-# ============ GENERADORES DE DOCUMENTOS ============
+# ============ DOCX ============
 
-def docx_bytes(texto, titulo="Documento generado por EscribIA"):
+def docx_bytes(texto, titulo="Documento EscribIA"):
     doc = Document()
     if "TITULO:" not in texto.upper():
         doc.add_heading(titulo, level=1)
-
     for linea in texto.split("\n"):
         l = linea.strip()
         if not l:
             continue
         up = l.upper()
-
         if up.startswith("TITULO:"):
             doc.add_heading(l.split(":", 1)[1].strip(), level=0)
         elif up.startswith("SECCION:"):
@@ -267,12 +199,12 @@ def docx_bytes(texto, titulo="Documento generado por EscribIA"):
             doc.add_heading("Introducción", level=1)
         elif up.startswith("DESARROLLO"):
             doc.add_heading("Desarrollo", level=1)
-        elif up.startswith("CONCEPTOS CLAVE") or up.startswith("CONCEPTOS:"):
+        elif up.startswith("CONCEPTOS"):
             doc.add_heading("Conceptos clave", level=1)
         elif up.startswith("CONCLUSION") or up.startswith("CONCLUSIÓN"):
             doc.add_heading("Conclusión", level=1)
-        elif up.startswith("PREGUNTAS DE REPASO") or up.startswith("PREGUNTAS:"):
-            doc.add_heading("Preguntas de repaso", level=1)
+        elif up.startswith("PREGUNTAS"):
+            doc.add_heading("Preguntas", level=1)
         elif up.startswith("RESUMEN:"):
             doc.add_heading("Resumen", level=1)
         elif l.startswith("-"):
@@ -281,11 +213,12 @@ def docx_bytes(texto, titulo="Documento generado por EscribIA"):
             doc.add_paragraph(l, style="List Number")
         else:
             doc.add_paragraph(l)
-
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
+
+# ============ PPTX ============
 
 def parsear_slides(texto):
     slides = []
@@ -295,10 +228,10 @@ def parsear_slides(texto):
             continue
         titulo, explicacion, puntos = "", "", []
         for linea in lineas:
-            mayus = linea.upper()
-            if mayus.startswith("TITULO:"):
+            up = linea.upper()
+            if up.startswith("TITULO:"):
                 titulo = linea.split(":", 1)[1].strip()
-            elif mayus.startswith("EXPLICACION:"):
+            elif up.startswith("EXPLICACION:"):
                 explicacion = linea.split(":", 1)[1].strip()
             elif linea.startswith("-"):
                 puntos.append(linea[1:].strip())
@@ -313,7 +246,7 @@ def parsear_slides(texto):
     return slides
 
 
-def pptx_bytes(texto, con_imagenes=True):
+def pptx_bytes(texto):
     slides = parsear_slides(texto)
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -321,55 +254,44 @@ def pptx_bytes(texto, con_imagenes=True):
 
     portada = prs.slides.add_slide(prs.slide_layouts[0])
     portada.shapes.title.text = "Apuntes digitalizados"
-    portada.placeholders[1].text = (
-        f"EscribIA - {datetime.now().strftime('%d/%m/%Y')}"
-    )
+    portada.placeholders[1].text = f"EscribIA - {datetime.now().strftime('%d/%m/%Y')}"
 
     for titulo, explicacion, puntos in slides:
         slide = prs.slides.add_slide(prs.slide_layouts[5])
         slide.shapes.title.text = titulo
 
-        tiene_imagen = False
-        if con_imagenes and UNSPLASH_ACCESS_KEY and titulo:
-            imagen_url = buscar_imagen_unsplash(titulo)
-            if imagen_url:
+        tiene_img = False
+        if UNSPLASH_ACCESS_KEY and titulo:
+            url = buscar_imagen(titulo)
+            if url:
                 try:
-                    img_data = requests.get(imagen_url, timeout=15).content
-                    slide.shapes.add_picture(
-                        io.BytesIO(img_data),
-                        left=Inches(7.0), top=Inches(1.8),
-                        width=Inches(5.8),
-                    )
-                    tiene_imagen = True
+                    data = requests.get(url, timeout=15).content
+                    slide.shapes.add_picture(io.BytesIO(data), left=Inches(7.0),
+                                              top=Inches(1.8), width=Inches(5.8))
+                    tiene_img = True
                 except Exception:
                     pass
 
-        ancho_texto = Inches(6.2) if tiene_imagen else Inches(12.1)
+        ancho = Inches(6.2) if tiene_img else Inches(12.1)
 
         if explicacion:
-            caja_expl = slide.shapes.add_textbox(
-                Inches(0.6), Inches(1.6), ancho_texto, Inches(1.5)
-            )
-            tf = caja_expl.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
+            caja = slide.shapes.add_textbox(Inches(0.6), Inches(1.6), ancho, Inches(1.5))
+            caja.text_frame.word_wrap = True
+            p = caja.text_frame.paragraphs[0]
             p.text = explicacion
             p.font.size = Pt(16)
             p.font.italic = True
 
         if puntos:
-            top_puntos = Inches(3.4) if explicacion else Inches(2.0)
-            caja_puntos = slide.shapes.add_textbox(
-                Inches(0.6), top_puntos, ancho_texto, Inches(4.0)
-            )
-            tf2 = caja_puntos.text_frame
-            tf2.word_wrap = True
-            for i, punto in enumerate(puntos):
+            top = Inches(3.4) if explicacion else Inches(2.0)
+            caja2 = slide.shapes.add_textbox(Inches(0.6), top, ancho, Inches(4.0))
+            caja2.text_frame.word_wrap = True
+            for i, pt in enumerate(puntos):
                 if i == 0:
-                    par = tf2.paragraphs[0]
+                    par = caja2.text_frame.paragraphs[0]
                 else:
-                    par = tf2.add_paragraph()
-                par.text = f"•  {punto}"
+                    par = caja2.text_frame.add_paragraph()
+                par.text = f"•  {pt}"
                 par.font.size = Pt(18)
 
     buf = io.BytesIO()
@@ -377,99 +299,121 @@ def pptx_bytes(texto, con_imagenes=True):
     return buf.getvalue()
 
 
-# ============ FUNCIONES DE BASE DE DATOS ============
+# ============ BD ============
 
-def obtener_usos_mes(user_id, mes_actual):
+def obtener_usos(uid, mes):
     try:
-        response = supabase_client.table("usage_logs") \
-            .select("usage_count") \
-            .eq("user_id", user_id) \
-            .eq("month_year", mes_actual) \
-            .execute()
-        if response.data:
-            return response.data[0]["usage_count"]
-        return 0
+        r = supabase_client.table("usage_logs").select("usage_count") \
+            .eq("user_id", uid).eq("month_year", mes).execute()
+        return r.data[0]["usage_count"] if r.data else 0
     except Exception:
         return 0
 
 
-def incrementar_uso(user_id, mes_actual, usos_actuales):
+def sumar_uso(uid, mes, actual):
     try:
-        if usos_actuales == 0:
+        if actual == 0:
             supabase_client.table("usage_logs").insert({
-                "user_id": user_id,
-                "month_year": mes_actual,
-                "usage_count": 1,
+                "user_id": uid, "month_year": mes, "usage_count": 1
             }).execute()
         else:
-            supabase_client.table("usage_logs") \
-                .update({"usage_count": usos_actuales + 1}) \
-                .eq("user_id", user_id) \
-                .eq("month_year", mes_actual) \
-                .execute()
+            supabase_client.table("usage_logs").update(
+                {"usage_count": actual + 1}
+            ).eq("user_id", uid).eq("month_year", mes).execute()
     except Exception as e:
-        st.warning(f"No se pudo registrar el uso: {e}")
+        st.warning(f"No se pudo registrar uso: {e}")
 
 
-def guardar_conversion(user_id, source_type, texto):
+def guardar_conv(uid, tipo, texto):
     try:
         supabase_client.table("conversions").insert({
-            "user_id": user_id,
-            "source_type": source_type,
-            "generated_text": texto[:5000],
+            "user_id": uid, "source_type": tipo, "generated_text": texto[:5000]
         }).execute()
     except Exception:
         pass
 
 
-# ============ CONFIGURACIÓN DE PÁGINA ============
+# ============ LOGIN ============
 
 st.set_page_config(page_title="EscribIA", page_icon="📝", layout="centered")
 
+if "user" not in st.session_state:
+    st.session_state["user"] = None
 
-# ============ AUTENTICACIÓN ============
 
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-
-if not st.session_state.get("authenticated", False):
+if st.session_state["user"] is None:
     st.title("📝 EscribIA")
     st.caption("Apuntes escritos a mano, convertidos en documentos digitales con IA")
     st.divider()
 
-    # st-login-form lee SUPABASE_URL y SUPABASE_KEY de los Secrets
-    # automáticamente. No hay que pasarle el cliente.
-    login_form(
-        title="Inicia sesión o crea tu cuenta",
-        user_tablename="profiles",
-    )
+    tab1, tab2 = st.tabs(["🔐 Iniciar sesión", "✨ Crear cuenta"])
 
-    if st.session_state.get("authenticated", False):
-        st.rerun()
+    with tab1:
+        with st.form("login"):
+            email = st.text_input("Correo")
+            pwd = st.text_input("Contraseña", type="password")
+            ok = st.form_submit_button("Iniciar sesión", use_container_width=True)
+        if ok:
+            try:
+                resp = supabase_client.auth.sign_in_with_password(
+                    {"email": email, "password": pwd}
+                )
+                if resp.user:
+                    st.session_state["user"] = {"id": resp.user.id, "email": resp.user.email}
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    with tab2:
+        st.caption("Mínimo 8 caracteres con mayúscula, minúscula, número y un símbolo (@ $ ! % * ? & _ ^ # -).")
+        with st.form("registro"):
+            email_r = st.text_input("Correo", key="r_email")
+            pwd_r = st.text_input("Contraseña", type="password", key="r_pwd")
+            pwd_r2 = st.text_input("Repite contraseña", type="password", key="r_pwd2")
+            ok_r = st.form_submit_button("Crear cuenta", use_container_width=True)
+        if ok_r:
+            if pwd_r != pwd_r2:
+                st.error("Las contraseñas no coinciden.")
+            elif len(pwd_r) < 8:
+                st.error("Mínimo 8 caracteres.")
+            else:
+                try:
+                    resp = supabase_client.auth.sign_up(
+                        {"email": email_r, "password": pwd_r}
+                    )
+                    if resp.user:
+                        st.success(
+                            "✅ Cuenta creada. Revisa tu correo para confirmar y luego inicia sesión."
+                        )
+                    else:
+                        st.warning("Revisa tu correo para confirmar la cuenta.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
     st.stop()
 
 
-# ============ USUARIO AUTENTICADO ============
+# ============ APP PRINCIPAL ============
 
-user_id = st.session_state.get("user_id")
-username = st.session_state.get("username", "Usuario")
+uid = st.session_state["user"]["id"]
+email = st.session_state["user"]["email"]
+nombre = email.split("@")[0] if email else "Usuario"
 
 with st.sidebar:
-    st.markdown(f"### 👤 {username}")
-    mes_actual = datetime.now().strftime("%Y-%m")
-    usos = obtener_usos_mes(user_id, mes_actual)
+    st.markdown(f"### 👤 {nombre}")
+    st.caption(email)
+    mes = datetime.now().strftime("%Y-%m")
+    usos = obtener_usos(uid, mes)
     restantes = max(0, LIMITE_GRATUITO - usos)
-    st.caption(f"Plan gratuito: {restantes} usos restantes este mes")
+    st.caption(f"Usos restantes: {restantes}/{LIMITE_GRATUITO}")
     st.progress(min(usos / LIMITE_GRATUITO, 1.0))
     st.divider()
     if st.button("🚪 Cerrar sesión", use_container_width=True):
-        st.session_state["authenticated"] = False
-        st.session_state.pop("user_id", None)
-        st.session_state.pop("username", None)
+        try:
+            supabase_client.auth.sign_out()
+        except Exception:
+            pass
+        st.session_state["user"] = None
         st.rerun()
-
-
-# ============ INTERFAZ PRINCIPAL ============
 
 st.title("📝 EscribIA")
 st.caption("Apuntes escritos a mano, convertidos en documentos digitales con IA")
@@ -477,105 +421,70 @@ st.divider()
 
 formato = st.radio(
     "¿Qué quieres generar?",
-    [
-        "📝 Solo lo anotado (transcripción literal)",
-        "📚 Documento completo de estudio (con IA)",
-        "📊 Presentación de PowerPoint",
-        "📄 Resumen corto",
-    ],
-    captions=[
-        "Respeta el texto tal cual lo escribiste.",
-        "La IA amplía y estructura en secciones.",
-        "Diapositivas con imágenes automáticas.",
-        "Resumen breve con conceptos y preguntas.",
-    ],
+    ["📝 Solo lo anotado", "📚 Documento completo de estudio",
+     "📊 Presentación PowerPoint", "📄 Resumen corto"],
 )
 
-foto = st.file_uploader(
-    "Sube o toma la foto del apunte",
-    type=["jpg", "jpeg", "png", "webp"],
-)
+foto = st.file_uploader("Sube o toma la foto del apunte",
+                          type=["jpg", "jpeg", "png", "webp"])
 
 if foto:
     img = Image.open(foto)
     st.image(img, caption="Apunte cargado", use_container_width=True)
 
     if st.button("✨ Procesar con IA", type="primary", use_container_width=True):
-        # --- Verificar límite de uso ---
-        mes_actual = datetime.now().strftime("%Y-%m")
-        usos_actuales = obtener_usos_mes(user_id, mes_actual)
+        mes = datetime.now().strftime("%Y-%m")
+        usos_act = obtener_usos(uid, mes)
 
-        if usos_actuales >= LIMITE_GRATUITO:
-            st.error(
-                f"🚫 Has alcanzado tu límite de {LIMITE_GRATUITO} usos "
-                f"gratuitos este mes. Actualiza a un plan de pago para seguir."
-            )
+        if usos_act >= LIMITE_GRATUITO:
+            st.error(f"Límite de {LIMITE_GRATUITO} usos alcanzado este mes.")
             st.stop()
 
-        # --- Preparar imagen ---
         img.thumbnail((1600, 1600))
         buf = io.BytesIO()
         img.convert("RGB").save(buf, "JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
-        mime = "image/jpeg"
 
-        # --- Elegir prompt ---
         if "Documento completo" in formato:
-            prompt = PROMPT_COMPLETO
-            source_type = "full_doc"
+            prompt, tipo = PROMPT_COMPLETO, "full_doc"
         elif "Solo lo anotado" in formato:
-            prompt = PROMPT_WORD
-            source_type = "word"
+            prompt, tipo = PROMPT_WORD, "word"
         elif "PowerPoint" in formato:
-            prompt = PROMPT_PPT
-            source_type = "ppt"
+            prompt, tipo = PROMPT_PPT, "ppt"
         else:
-            prompt = PROMPT_RESUMEN
-            source_type = "summary"
+            prompt, tipo = PROMPT_RESUMEN, "summary"
 
-        # --- Procesar ---
-        with st.spinner("Procesando con inteligencia artificial..."):
+        with st.spinner("Procesando..."):
             try:
-                texto, proveedor = procesar(b64, mime, prompt)
+                texto, prov = procesar(b64, "image/jpeg", prompt)
             except Exception as e:
                 st.error(f"Error: {e}")
                 st.stop()
 
-        # --- Registrar uso y guardar en BD ---
-        incrementar_uso(user_id, mes_actual, usos_actuales)
-        guardar_conversion(user_id, source_type, texto)
+        sumar_uso(uid, mes, usos_act)
+        guardar_conv(uid, tipo, texto)
 
-        st.success(f"✅ Procesado con {proveedor}")
-        st.subheader("Contenido generado")
-        st.text_area("Texto", texto, height=300, label_visibility="collapsed")
+        st.success(f"✅ Procesado con {prov}")
+        st.text_area("Resultado", texto, height=300)
 
-        # --- Generar archivo ---
         if "Documento completo" in formato:
-            datos = docx_bytes(texto, "Documento de estudio - EscribIA")
-            nombre = f"escribia_documento_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            datos = docx_bytes(texto, "Documento de estudio")
+            nombre_arch = f"escribia_doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             mime_dl = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         elif "Solo lo anotado" in formato:
-            datos = docx_bytes(texto, "Apunte transcrito - EscribIA")
-            nombre = f"escribia_apunte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            datos = docx_bytes(texto, "Apunte transcrito")
+            nombre_arch = f"escribia_apunte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             mime_dl = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         elif "PowerPoint" in formato:
-            if UNSPLASH_ACCESS_KEY:
-                with st.spinner("Buscando imágenes..."):
-                    datos = pptx_bytes(texto, con_imagenes=True)
-            else:
-                datos = pptx_bytes(texto, con_imagenes=False)
-            nombre = f"escribia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+            with st.spinner("Buscando imágenes..."):
+                datos = pptx_bytes(texto)
+            nombre_arch = f"escribia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
             mime_dl = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         else:
-            datos = docx_bytes(texto, "Resumen de estudio - EscribIA")
-            nombre = f"escribia_resumen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            datos = docx_bytes(texto, "Resumen de estudio")
+            nombre_arch = f"escribia_resumen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             mime_dl = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-        st.download_button(
-            "⬇️ Descargar archivo",
-            data=datos,
-            file_name=nombre,
-            mime=mime_dl,
-            type="primary",
-            use_container_width=True,
-              )
+        st.download_button("⬇️ Descargar archivo", data=datos,
+                            file_name=nombre_arch, mime=mime_dl,
+                            type="primary", use_container_width=True)
