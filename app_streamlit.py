@@ -71,53 +71,56 @@ restaurar_sesion()
 MODELO_GEMINI = "gemini-3.8-flash"
 MODELO_GROQ = "qwen/qwen3.8-27b"
 
-URL_GEMINI = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELO_GEMINI}:generateContent"
+URL_GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/" + MODELO_GEMINI + ":generateContent"
 URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
 
 
 PROMPT_WORD = """Transcribe este apunte manuscrito en español con fidelidad.
 Corrige ortografía, organiza en párrafos. Devuelve SOLO el texto, sin markdown."""
 
+
 PROMPT_COMPLETO = """Crea un documento de estudio del apunte.
 
-TITULO: <título>
+TITULO: <titulo>
 INTRODUCCION:
-<2 líneas>
+<2 lineas>
 DESARROLLO:
 SECCION: <nombre>
-<párrafo>
+<parrafo>
 SECCION: <nombre>
-<párrafo>
+<parrafo>
 CONCEPTOS CLAVE:
 - <concepto>
 - <concepto>
 CONCLUSION:
-<1-2 líneas>
+<1-2 lineas>
 PREGUNTAS DE REPASO:
 1. <pregunta>
 2. <pregunta>
 
-Máximo 500 palabras. Sin asteriscos."""
+Maximo 500 palabras. Sin asteriscos."""
+
 
 PROMPT_PPT = """Convierte el apunte en diapositivas.
 
-TITULO: <título corto>
+TITULO: <titulo corto>
 EXPLICACION: <1 frase>
 - punto 1
 - punto 2
 - punto 3
 ---
-TITULO: <otro título>
-EXPLICACION: <explicación>
+TITULO: <otro titulo>
+EXPLICACION: <explicacion>
 - punto 1
 ---
 
 Entre 4 y 6 diapositivas. Sin asteriscos."""
 
+
 PROMPT_RESUMEN = """Resume el apunte muy breve.
 
 RESUMEN:
-<párrafo de 3 líneas>
+<parrafo de 3 lineas>
 CONCEPTOS:
 - <concepto>
 - <concepto>
@@ -125,20 +128,21 @@ PREGUNTAS:
 1. <pregunta>
 2. <pregunta>
 
-Máximo 200 palabras. Sin asteriscos."""
+Maximo 200 palabras. Sin asteriscos."""
+
 
 PROMPT_ECUACIONES = """Analiza este apunte manuscrito. Si contiene ecuaciones,
-sistemas de ecuaciones o problemas matemáticos, resuélvelos paso a paso.
+sistemas de ecuaciones o problemas matematicos, resolvelos paso a paso.
 
 Devuelve SOLO esto, con este formato exacto:
 
-TITULO: <título del tema>
+TITULO: <titulo del tema>
 
 ECUACIONES ORIGINALES:
 <escribe las ecuaciones tal como aparecen en el apunte>
 
 METODO:
-<nombre del método: sustitución, igualación, reducción, determinantes, etc.>
+<nombre del metodo: sustitucion, igualacion, reduccion, determinantes>
 
 PASOS:
 1. <paso 1 detallado>
@@ -155,13 +159,14 @@ VERIFICACION:
 Si el apunte NO contiene ecuaciones, devuelve solo: SIN_ECUACIONES
 
 Reglas:
-- Sé claro y didáctico.
-- No inventes datos que no estén en el apunte.
+- Se claro y didactico.
+- No inventes datos que no esten en el apunte.
 - Sin asteriscos ni markdown."""
 
+
 PROMPT_EXCEL = """Analiza este apunte manuscrito. Extrae TODOS los datos que
-estén en formato tabular: tablas, listas con columnas, datos numéricos
-organizados, inventarios, calificaciones, presupuestos, etc.
+esten en formato tabular: tablas, listas con columnas, datos numericos
+organizados, inventarios, calificaciones, presupuestos.
 
 Devuelve SOLO los datos en formato CSV, con la primera fila como encabezados.
 
@@ -173,8 +178,8 @@ Peras,5,3000
 Reglas:
 - Separador: coma
 - Sin comillas alrededor de los valores
-- Sin líneas vacías
-- Si un dato no está claro, déjalo vacío
+- Sin lineas vacias
+- Si un dato no esta claro, dejalo vacio
 - Si NO hay datos tabulares, devuelve solo: SIN_DATOS
 - NO agregues explicaciones ni texto adicional, solo el CSV"""
 
@@ -182,31 +187,31 @@ Reglas:
 # ============ IA ============
 
 def _groq(b64, mime, prompt):
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+    headers = {"Authorization": "Bearer " + GROQ_API_KEY}
     payload = {
         "model": MODELO_GROQ,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            {"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + b64}},
         ]}],
         "temperature": 0.2,
         "max_tokens": 900,
     }
     r = requests.post(URL_GROQ, headers=headers, json=payload, timeout=120)
     if r.status_code != 200:
-        raise RuntimeError(f"Groq {r.status_code}")
+        raise RuntimeError("Groq " + str(r.status_code))
     return r.json()["choices"][0]["message"]["content"]
 
 
 def _gemini(b64, mime, prompt):
-    url = f"{URL_GEMINI}?key={GEMINI_API_KEY}"
+    url = URL_GEMINI + "?key=" + GEMINI_API_KEY
     payload = {"contents": [{"parts": [
         {"text": prompt},
         {"inline_data": {"mime_type": mime, "data": b64}},
     ]}]}
     r = requests.post(url, json=payload, timeout=120)
     if r.status_code != 200:
-        raise RuntimeError(f"Gemini {r.status_code}")
+        raise RuntimeError("Gemini " + str(r.status_code))
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
@@ -216,12 +221,12 @@ def procesar(b64, mime, prompt):
         try:
             return _groq(b64, mime, prompt), "Groq"
         except Exception as e:
-            errores.append(f"Groq: {e}")
+            errores.append("Groq: " + str(e))
     if GEMINI_API_KEY:
         try:
             return _gemini(b64, mime, prompt), "Gemini"
         except Exception as e:
-            errores.append(f"Gemini: {e}")
+            errores.append("Gemini: " + str(e))
     raise RuntimeError(" | ".join(errores))
 
 
@@ -303,7 +308,6 @@ def excel_bytes(csv_texto):
     if "SIN_DATOS" in csv_texto.upper():
         raise ValueError("No se detectaron datos tabulares en el apunte.")
 
-    # Limpiar posibles bloques de código markdown
     limpio = csv_texto.strip()
     if limpio.startswith("```"):
         lineas = limpio.split("\n")
@@ -315,21 +319,19 @@ def excel_bytes(csv_texto):
     ws.title = "Datos"
 
     reader = csv.reader(StringIO(limpio))
-    filas_validas = 0
+    filas = 0
     for fila in reader:
         if fila and any(c.strip() for c in fila):
             ws.append(fila)
-            filas_validas += 1
+            filas += 1
 
-    if filas_validas == 0:
-        raise ValueError("El CSV no contiene filas de datos válidas.")
+    if filas == 0:
+        raise ValueError("El CSV no contiene filas validas.")
 
-    # Encabezados con estilo
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
 
-    # Ancho automático de columnas
     for col in ws.columns:
         max_len = 0
         letra = col[0].column_letter
@@ -370,7 +372,7 @@ def parsear_slides(texto):
             else:
                 puntos.append(linea)
         if titulo or puntos:
-            slides.append((titulo or "Sin título", explicacion, puntos))
+            slides.append((titulo or "Sin titulo", explicacion, puntos))
     return slides
 
 
@@ -382,7 +384,7 @@ def pptx_bytes(texto):
 
     portada = prs.slides.add_slide(prs.slide_layouts[0])
     portada.shapes.title.text = "Apuntes digitalizados"
-    portada.placeholders[1].text = f"EscribIA - {datetime.now().strftime('%d/%m/%Y')}"
+    portada.placeholders[1].text = "EscribIA - " + datetime.now().strftime("%d/%m/%Y")
 
     for titulo, explicacion, puntos in slides:
         slide = prs.slides.add_slide(prs.slide_layouts[5])
@@ -419,7 +421,7 @@ def pptx_bytes(texto):
                     par = caja2.text_frame.paragraphs[0]
                 else:
                     par = caja2.text_frame.add_paragraph()
-                par.text = f"•  {pt}"
+                par.text = "•  " + pt
                 par.font.size = Pt(18)
 
     buf = io.BytesIO()
@@ -536,7 +538,7 @@ if st.session_state["user"] is None:
                     st.session_state["perfil_cache"] = None
                     st.rerun()
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error("Error: " + str(e))
 
     with tab2:
         st.caption("Mínimo 8 caracteres con mayúscula, minúscula, número y un símbolo.")
@@ -558,7 +560,7 @@ if st.session_state["user"] is None:
                     if resp.user:
                         st.success("✅ Cuenta creada. Revisa tu correo para confirmar.")
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error("Error: " + str(e))
     st.stop()
 
 
@@ -580,19 +582,19 @@ usos = st.session_state["usos_cache"]
 
 
 with st.sidebar:
-    st.markdown(f"### 👤 {nombre}")
+    st.markdown("### 👤 " + nombre)
     st.caption(email)
 
     if premium_activo:
         try:
             fecha = datetime.fromisoformat(perfil["premium_until"].replace("Z", "+00:00"))
-            st.success(f"⭐ **Premium activo**\n\nVence el {fecha.strftime('%d/%m/%Y')}")
+            st.success("⭐ **Premium activo**\n\nVence el " + fecha.strftime("%d/%m/%Y"))
         except Exception:
             st.success("⭐ **Premium activo**")
         st.caption("Uso ilimitado este mes")
     else:
         restantes = max(0, LIMITE_GRATUITO - usos)
-        st.caption(f"Plan gratuito: {restantes}/{LIMITE_GRATUITO} usos")
+        st.caption("Plan gratuito: " + str(restantes) + "/" + str(LIMITE_GRATUITO) + " usos")
         st.progress(min(usos / LIMITE_GRATUITO, 1.0))
 
     st.divider()
@@ -607,7 +609,7 @@ with st.sidebar:
                     with st.spinner("Validando..."):
                         resultado = activar_codigo(codigo_input)
                     if resultado and resultado.get("success"):
-                        st.success(resultado.get("message", "¡Premium activado!"))
+                        st.success(resultado.get("message", "Premium activado"))
                         st.session_state["perfil_cache"] = None
                         st.session_state["usos_cache"] = None
                         st.balloons()
@@ -642,4 +644,7 @@ formato = st.radio(
     [
         "📝 Solo lo anotado",
         "📚 Documento completo de estudio",
-        
+        "📊 Presentación PowerPoint",
+        "📄 Resumen corto",
+        "🧮 Resolver ecuaciones",
+ 
