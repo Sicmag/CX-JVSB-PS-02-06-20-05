@@ -49,7 +49,7 @@ if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("AIzaSy"):
 
 # ============ CONFIGURACIÓN ============
 
-MODELO_GEMINI = "gemini-3.6-flash"
+MODELO_GEMINI = "gemini-2.5-flash"
 MODELO_GROQ = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 URL_GEMINI = (
