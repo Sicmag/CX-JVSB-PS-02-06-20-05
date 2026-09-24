@@ -51,14 +51,9 @@ if not GEMINI_API_KEY and not GROQ_API_KEY:
     )
     st.stop()
 
-# Si la clave de Gemini no tiene el formato correcto (empieza con AIzaSy),
-# la ignoramos para evitar crasheos con claves inválidas.
-if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("AIzaSy"):
-    st.warning(
-        "⚠️ La clave de GEMINI_API_KEY no tiene el formato correcto. "
-        "Se usará Groq mientras se corrige."
-    )
-    GEMINI_API_KEY = None
+# NOTA: ya no verificamos el formato de la clave de Gemini.
+# Google cambió el formato (ahora puede empezar con "AIzaSy" o "AQ."),
+# así que dejamos que la propia API determine si es válida.
 
 
 # ============ CONFIGURACIÓN ============
@@ -216,7 +211,6 @@ def docx_bytes(texto, titulo="Documento generado por EscribIA"):
     """Genera un Word con formato, detectando etiquetas de sección."""
     doc = Document()
 
-    # Si el texto no trae TITULO:, agregamos un encabezado por defecto
     if "TITULO:" not in texto.upper():
         doc.add_heading(titulo, level=1)
 
@@ -280,7 +274,7 @@ def parsear_slides(texto):
 
 
 def pptx_bytes(texto):
-    """Genera una presentación con título, explicación y puntos por diapositiva."""
+    """Genera una presentación con título, explicación y puntos."""
     slides = parsear_slides(texto)
 
     prs = Presentation()
@@ -412,4 +406,4 @@ if foto:
             mime=mime_dl,
             type="primary",
             use_container_width=True,
-        )
+          )
