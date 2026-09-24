@@ -51,7 +51,7 @@ supabase_client = get_supabase()
 
 
 def restaurar_sesion():
-    """Restaura la sesión guardada si existe (necesario tras reruns de Streamlit)."""
+    """Restaura la sesión guardada tras reruns de Streamlit."""
     if st.session_state.get("access_token") and st.session_state.get("refresh_token"):
         try:
             supabase_client.auth.set_session(
@@ -350,13 +350,18 @@ def guardar_conv(uid, tipo, texto):
         pass
 
 
-# ============ LOGIN ============
+# ============ INICIALIZACIÓN DE ESTADO ============
 
 st.set_page_config(page_title="EscribIA", page_icon="📝", layout="centered")
 
 if "user" not in st.session_state:
     st.session_state["user"] = None
 
+if "usos_cache" not in st.session_state:
+    st.session_state["usos_cache"] = None
+
+
+# ============ LOGIN ============
 
 if st.session_state["user"] is None:
     st.title("📝 EscribIA")
@@ -382,6 +387,7 @@ if st.session_state["user"] is None:
                     }
                     st.session_state["access_token"] = resp.session.access_token
                     st.session_state["refresh_token"] = resp.session.refresh_token
+                    st.session_state["usos_cache"] = None
                     st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -419,15 +425,22 @@ if st.session_state["user"] is None:
 uid = st.session_state["user"]["id"]
 email = st.session_state["user"]["email"]
 nombre = email.split("@")[0] if email else "Usuario"
+mes_actual = datetime.now().strftime("%Y-%m")
+
 
 with st.sidebar:
     st.markdown(f"### 👤 {nombre}")
     st.caption(email)
-    mes = datetime.now().strftime("%Y-%m")
-    usos = obtener_usos(uid, mes)
+
+    # Leer del cache si existe, si no consultar la BD una sola vez
+    if st.session_state["usos_cache"] is None:
+        st.session_state["usos_cache"] = obtener_usos(uid, mes_actual)
+
+    usos = st.session_state["usos_cache"]
     restantes = max(0, LIMITE_GRATUITO - usos)
     st.caption(f"Usos restantes: {restantes}/{LIMITE_GRATUITO}")
     st.progress(min(usos / LIMITE_GRATUITO, 1.0))
+
     st.divider()
     if st.button("🚪 Cerrar sesión", use_container_width=True):
         try:
@@ -437,7 +450,9 @@ with st.sidebar:
         st.session_state["user"] = None
         st.session_state.pop("access_token", None)
         st.session_state.pop("refresh_token", None)
+        st.session_state["usos_cache"] = None
         st.rerun()
+
 
 st.title("📝 EscribIA")
 st.caption("Apuntes escritos a mano, convertidos en documentos digitales con IA")
@@ -457,18 +472,23 @@ if foto:
     st.image(img, caption="Apunte cargado", use_container_width=True)
 
     if st.button("✨ Procesar con IA", type="primary", use_container_width=True):
-        mes = datetime.now().strftime("%Y-%m")
-        usos_act = obtener_usos(uid, mes)
+        # Leer uso actual (del cache para consistencia)
+        usos_act = st.session_state["usos_cache"]
+        if usos_act is None:
+            usos_act = obtener_usos(uid, mes_actual)
+            st.session_state["usos_cache"] = usos_act
 
         if usos_act >= LIMITE_GRATUITO:
             st.error(f"Límite de {LIMITE_GRATUITO} usos alcanzado este mes.")
             st.stop()
 
+        # Preparar imagen
         img.thumbnail((1600, 1600))
         buf = io.BytesIO()
         img.convert("RGB").save(buf, "JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
 
+        # Elegir prompt según formato
         if "Documento completo" in formato:
             prompt, tipo = PROMPT_COMPLETO, "full_doc"
         elif "Solo lo anotado" in formato:
@@ -478,6 +498,7 @@ if foto:
         else:
             prompt, tipo = PROMPT_RESUMEN, "summary"
 
+        # Procesar con IA
         with st.spinner("Procesando..."):
             try:
                 texto, prov = procesar(b64, "image/jpeg", prompt)
@@ -485,12 +506,15 @@ if foto:
                 st.error(f"Error: {e}")
                 st.stop()
 
-        sumar_uso(uid, mes, usos_act)
+        # Registrar uso y actualizar cache INMEDIATAMENTE
+        sumar_uso(uid, mes_actual, usos_act)
+        st.session_state["usos_cache"] = usos_act + 1
         guardar_conv(uid, tipo, texto)
 
         st.success(f"✅ Procesado con {prov}")
         st.text_area("Resultado", texto, height=300)
 
+        # Generar archivo según formato
         if "Documento completo" in formato:
             datos = docx_bytes(texto, "Documento de estudio")
             nombre_arch = f"escribia_doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
