@@ -3,6 +3,5 @@ Pillow
 python-docx
 python-pptx
 streamlit
-supabase
+supabase>=2.10.0
 st-login-form
-python-dotenv
