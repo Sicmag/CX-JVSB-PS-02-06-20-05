@@ -1,6 +1,6 @@
 import base64
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 import streamlit as st
@@ -51,7 +51,6 @@ supabase_client = get_supabase()
 
 
 def restaurar_sesion():
-    """Restaura la sesión guardada tras reruns de Streamlit."""
     if st.session_state.get("access_token") and st.session_state.get("refresh_token"):
         try:
             supabase_client.auth.set_session(
@@ -336,8 +335,8 @@ def sumar_uso(uid, mes, actual):
             supabase_client.table("usage_logs").update(
                 {"usage_count": actual + 1}
             ).eq("user_id", uid).eq("month_year", mes).execute()
-    except Exception as e:
-        st.warning(f"No se pudo registrar uso: {e}")
+    except Exception:
+        pass
 
 
 def guardar_conv(uid, tipo, texto):
@@ -350,15 +349,49 @@ def guardar_conv(uid, tipo, texto):
         pass
 
 
-# ============ INICIALIZACIÓN DE ESTADO ============
+def obtener_perfil(uid):
+    """Devuelve dict con premium_until y premium_plan."""
+    restaurar_sesion()
+    try:
+        r = supabase_client.table("profiles") \
+            .select("premium_until, premium_plan") \
+            .eq("id", uid).execute()
+        return r.data[0] if r.data else {}
+    except Exception:
+        return {}
+
+
+def es_premium(perfil):
+    """Verifica si el premium está activo."""
+    if not perfil or not perfil.get("premium_until"):
+        return False
+    try:
+        fecha = datetime.fromisoformat(perfil["premium_until"].replace("Z", "+00:00"))
+        return fecha > datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
+def activar_codigo(code):
+    """Llama a la función RPC de Supabase."""
+    restaurar_sesion()
+    try:
+        resp = supabase_client.rpc("activar_codigo", {"p_code": code}).execute()
+        return resp.data
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+# ============ ESTADO ============
 
 st.set_page_config(page_title="EscribIA", page_icon="📝", layout="centered")
 
 if "user" not in st.session_state:
     st.session_state["user"] = None
-
 if "usos_cache" not in st.session_state:
     st.session_state["usos_cache"] = None
+if "perfil_cache" not in st.session_state:
+    st.session_state["perfil_cache"] = None
 
 
 # ============ LOGIN ============
@@ -388,12 +421,13 @@ if st.session_state["user"] is None:
                     st.session_state["access_token"] = resp.session.access_token
                     st.session_state["refresh_token"] = resp.session.refresh_token
                     st.session_state["usos_cache"] = None
+                    st.session_state["perfil_cache"] = None
                     st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
 
     with tab2:
-        st.caption("Mínimo 8 caracteres con mayúscula, minúscula, número y un símbolo (@ $ ! % * ? & _ ^ # -).")
+        st.caption("Mínimo 8 caracteres con mayúscula, minúscula, número y un símbolo.")
         with st.form("registro"):
             email_r = st.text_input("Correo", key="r_email")
             pwd_r = st.text_input("Contraseña", type="password", key="r_pwd")
@@ -410,11 +444,7 @@ if st.session_state["user"] is None:
                         {"email": email_r, "password": pwd_r}
                     )
                     if resp.user:
-                        st.success(
-                            "✅ Cuenta creada. Revisa tu correo para confirmar y luego inicia sesión."
-                        )
-                    else:
-                        st.warning("Revisa tu correo para confirmar la cuenta.")
+                        st.success("✅ Cuenta creada. Revisa tu correo para confirmar.")
                 except Exception as e:
                     st.error(f"Error: {e}")
     st.stop()
@@ -428,18 +458,54 @@ nombre = email.split("@")[0] if email else "Usuario"
 mes_actual = datetime.now().strftime("%Y-%m")
 
 
+# Cargar perfil y usos si no están en cache
+if st.session_state["perfil_cache"] is None:
+    st.session_state["perfil_cache"] = obtener_perfil(uid)
+if st.session_state["usos_cache"] is None:
+    st.session_state["usos_cache"] = obtener_usos(uid, mes_actual)
+
+perfil = st.session_state["perfil_cache"]
+premium_activo = es_premium(perfil)
+usos = st.session_state["usos_cache"]
+
+
 with st.sidebar:
     st.markdown(f"### 👤 {nombre}")
     st.caption(email)
 
-    # Leer del cache si existe, si no consultar la BD una sola vez
-    if st.session_state["usos_cache"] is None:
-        st.session_state["usos_cache"] = obtener_usos(uid, mes_actual)
+    if premium_activo:
+        try:
+            fecha = datetime.fromisoformat(perfil["premium_until"].replace("Z", "+00:00"))
+            st.success(f"⭐ **Premium activo**\n\nVence el {fecha.strftime('%d/%m/%Y')}")
+        except Exception:
+            st.success("⭐ **Premium activo**")
+        st.caption("Uso ilimitado este mes")
+    else:
+        restantes = max(0, LIMITE_GRATUITO - usos)
+        st.caption(f"Plan gratuito: {restantes}/{LIMITE_GRATUITO} usos")
+        st.progress(min(usos / LIMITE_GRATUITO, 1.0))
 
-    usos = st.session_state["usos_cache"]
-    restantes = max(0, LIMITE_GRATUITO - usos)
-    st.caption(f"Usos restantes: {restantes}/{LIMITE_GRATUITO}")
-    st.progress(min(usos / LIMITE_GRATUITO, 1.0))
+    st.divider()
+
+    if not premium_activo:
+        with st.expander("⭐ Activar Premium"):
+            st.caption("Ingresa tu código de activación")
+            codigo_input = st.text_input("Código", key="codigo_premium",
+                                          placeholder="ESCRIBIA-XXXX-XXXX")
+            if st.button("Activar", use_container_width=True, type="primary"):
+                if codigo_input:
+                    with st.spinner("Validando..."):
+                        resultado = activar_codigo(codigo_input)
+                    if resultado.get("success"):
+                        st.success(resultado.get("message", "¡Premium activado!"))
+                        st.session_state["perfil_cache"] = None
+                        st.session_state["usos_cache"] = None
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error(resultado.get("message", "Código inválido"))
+                else:
+                    st.warning("Escribe un código.")
 
     st.divider()
     if st.button("🚪 Cerrar sesión", use_container_width=True):
@@ -447,15 +513,17 @@ with st.sidebar:
             supabase_client.auth.sign_out()
         except Exception:
             pass
-        st.session_state["user"] = None
-        st.session_state.pop("access_token", None)
-        st.session_state.pop("refresh_token", None)
-        st.session_state["usos_cache"] = None
+        for k in ["user", "access_token", "refresh_token", "usos_cache", "perfil_cache"]:
+            st.session_state.pop(k, None)
         st.rerun()
 
 
 st.title("📝 EscribIA")
 st.caption("Apuntes escritos a mano, convertidos en documentos digitales con IA")
+
+if premium_activo:
+    st.info("⭐ Tienes **Premium activo**. Uso ilimitado.")
+
 st.divider()
 
 formato = st.radio(
@@ -472,15 +540,17 @@ if foto:
     st.image(img, caption="Apunte cargado", use_container_width=True)
 
     if st.button("✨ Procesar con IA", type="primary", use_container_width=True):
-        # Leer uso actual (del cache para consistencia)
-        usos_act = st.session_state["usos_cache"]
-        if usos_act is None:
-            usos_act = obtener_usos(uid, mes_actual)
-            st.session_state["usos_cache"] = usos_act
-
-        if usos_act >= LIMITE_GRATUITO:
-            st.error(f"Límite de {LIMITE_GRATUITO} usos alcanzado este mes.")
-            st.stop()
+        # Solo verificar límite si NO es premium
+        if not premium_activo:
+            usos_act = st.session_state["usos_cache"] or 0
+            if usos_act >= LIMITE_GRATUITO:
+                st.error(
+                    f"🚫 Alcanzaste tus {LIMITE_GRATUITO} usos gratuitos. "
+                    f"Activa Premium para uso ilimitado."
+                )
+                st.stop()
+        else:
+            usos_act = 0
 
         # Preparar imagen
         img.thumbnail((1600, 1600))
@@ -488,7 +558,7 @@ if foto:
         img.convert("RGB").save(buf, "JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
 
-        # Elegir prompt según formato
+        # Elegir prompt
         if "Documento completo" in formato:
             prompt, tipo = PROMPT_COMPLETO, "full_doc"
         elif "Solo lo anotado" in formato:
@@ -498,7 +568,6 @@ if foto:
         else:
             prompt, tipo = PROMPT_RESUMEN, "summary"
 
-        # Procesar con IA
         with st.spinner("Procesando..."):
             try:
                 texto, prov = procesar(b64, "image/jpeg", prompt)
@@ -506,15 +575,17 @@ if foto:
                 st.error(f"Error: {e}")
                 st.stop()
 
-        # Registrar uso y actualizar cache INMEDIATAMENTE
-        sumar_uso(uid, mes_actual, usos_act)
-        st.session_state["usos_cache"] = usos_act + 1
+        # Registrar uso solo si NO es premium
+        if not premium_activo:
+            sumar_uso(uid, mes_actual, usos_act)
+            st.session_state["usos_cache"] = usos_act + 1
+
         guardar_conv(uid, tipo, texto)
 
         st.success(f"✅ Procesado con {prov}")
         st.text_area("Resultado", texto, height=300)
 
-        # Generar archivo según formato
+        # Generar archivo
         if "Documento completo" in formato:
             datos = docx_bytes(texto, "Documento de estudio")
             nombre_arch = f"escribia_doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
