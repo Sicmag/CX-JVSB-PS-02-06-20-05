@@ -3,8 +3,8 @@ EscribIA - Versión web (Streamlit)
 Convierte fotos de apuntes manuscritos en documentos digitales con IA.
 
 Proveedores:
-  - Gemini (principal) → documentos largos y detallados
-  - Groq (respaldo)    → cuando Gemini falla o está saturado
+  - Groq (principal)   → rápida y estable
+  - Gemini (respaldo)  → cuando Groq falla
 
 Salidas:
   - Documento de Word (transcripción organizada)
@@ -43,7 +43,6 @@ def _leer_clave(nombre):
 GEMINI_API_KEY = _leer_clave("GEMINI_API_KEY")
 GROQ_API_KEY = _leer_clave("GROQ_API_KEY")
 
-# Verificar que al menos una exista
 if not GEMINI_API_KEY and not GROQ_API_KEY:
     st.error(
         "⚠️ No hay ninguna API key configurada. "
@@ -51,21 +50,17 @@ if not GEMINI_API_KEY and not GROQ_API_KEY:
     )
     st.stop()
 
-# NOTA: ya no verificamos el formato de la clave de Gemini.
-# Google cambió el formato (ahora puede empezar con "AIzaSy" o "AQ."),
-# así que dejamos que la propia API determine si es válida.
-
 
 # ============ CONFIGURACIÓN ============
 
 MODELO_GEMINI = "gemini-3.8-flash"
-MODELO_GROQ = "meta-llama/llama-4-scout-17b-16e-instruct"
+MODELO_GROQ = "qwen/qwen3.8-27b"
 
 URL_GEMINI = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{MODELO_GEMINI}:generateContent"
 )
-MODELO_GROQ = "qwen/qwen3.8-27b"
+URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
 
 
 # --- Prompts por tipo de salida ---
@@ -144,27 +139,8 @@ y termina con 3 preguntas de repaso. Sin markdown."""
 
 # ============ MOTOR DE IA ============
 
-def _gemini(imagen_b64, mime, prompt):
-    """Llama a Gemini (proveedor principal)."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("Gemini no disponible.")
-    url = f"{URL_GEMINI}?key={GEMINI_API_KEY}"
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": mime, "data": imagen_b64}},
-            ]
-        }]
-    }
-    r = requests.post(url, json=payload, timeout=120)
-    if r.status_code != 200:
-        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:200]}")
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-
-
 def _groq(imagen_b64, mime, prompt):
-    """Llama a Groq (proveedor de respaldo)."""
+    """Llama a Groq (proveedor principal)."""
     if not GROQ_API_KEY:
         raise RuntimeError("Groq no disponible.")
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
@@ -186,21 +162,40 @@ def _groq(imagen_b64, mime, prompt):
     return r.json()["choices"][0]["message"]["content"]
 
 
-def procesar(imagen_b64, mime, prompt):
-    """Intenta con Gemini primero. Si falla, cae a Groq."""
-    errores = []
+def _gemini(imagen_b64, mime, prompt):
+    """Llama a Gemini (proveedor de respaldo)."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("Gemini no disponible.")
+    url = f"{URL_GEMINI}?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime, "data": imagen_b64}},
+            ]
+        }]
+    }
+    r = requests.post(url, json=payload, timeout=120)
+    if r.status_code != 200:
+        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:200]}")
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-    if GEMINI_API_KEY:
-        try:
-            return _gemini(imagen_b64, mime, prompt), "Gemini"
-        except Exception as e:
-            errores.append(f"Gemini: {e}")
+
+def procesar(imagen_b64, mime, prompt):
+    """Intenta con Groq primero. Si falla, cae a Gemini."""
+    errores = []
 
     if GROQ_API_KEY:
         try:
             return _groq(imagen_b64, mime, prompt), "Groq"
         except Exception as e:
             errores.append(f"Groq: {e}")
+
+    if GEMINI_API_KEY:
+        try:
+            return _gemini(imagen_b64, mime, prompt), "Gemini"
+        except Exception as e:
+            errores.append(f"Gemini: {e}")
 
     raise RuntimeError(" | ".join(errores) or "Sin proveedores disponibles.")
 
@@ -406,4 +401,4 @@ if foto:
             mime=mime_dl,
             type="primary",
             use_container_width=True,
-          )
+      )
