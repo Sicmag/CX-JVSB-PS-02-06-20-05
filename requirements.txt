@@ -5,3 +5,4 @@ python-pptx
 streamlit
 supabase>=2.10.0
 st-login-form
+st-supabase-connection
