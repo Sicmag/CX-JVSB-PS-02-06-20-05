@@ -3,6 +3,10 @@ Pillow
 python-docx
 python-pptx
 streamlit
-supabase==2.20.0
-supabase-auth
 pandas
+supabase==2.20.0
+supabase-auth==2.20.0
+postgrest==2.20.0
+storage3==2.20.0
+realtime==2.20.0
+supabase-functions==2.20.0
