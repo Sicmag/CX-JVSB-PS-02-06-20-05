@@ -9,8 +9,6 @@ from docx import Document
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from supabase import create_client
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
 
 
 # ============ CLAVES ============
@@ -71,56 +69,53 @@ restaurar_sesion()
 MODELO_GEMINI = "gemini-3.8-flash"
 MODELO_GROQ = "qwen/qwen3.8-27b"
 
-URL_GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/" + MODELO_GEMINI + ":generateContent"
+URL_GEMINI = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELO_GEMINI}:generateContent"
 URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
 
 
 PROMPT_WORD = """Transcribe este apunte manuscrito en español con fidelidad.
 Corrige ortografía, organiza en párrafos. Devuelve SOLO el texto, sin markdown."""
 
-
 PROMPT_COMPLETO = """Crea un documento de estudio del apunte.
 
-TITULO: <titulo>
+TITULO: <título>
 INTRODUCCION:
-<2 lineas>
+<2 líneas>
 DESARROLLO:
 SECCION: <nombre>
-<parrafo>
+<párrafo>
 SECCION: <nombre>
-<parrafo>
+<párrafo>
 CONCEPTOS CLAVE:
 - <concepto>
 - <concepto>
 CONCLUSION:
-<1-2 lineas>
+<1-2 líneas>
 PREGUNTAS DE REPASO:
 1. <pregunta>
 2. <pregunta>
 
-Maximo 500 palabras. Sin asteriscos."""
-
+Máximo 500 palabras. Sin asteriscos."""
 
 PROMPT_PPT = """Convierte el apunte en diapositivas.
 
-TITULO: <titulo corto>
+TITULO: <título corto>
 EXPLICACION: <1 frase>
 - punto 1
 - punto 2
 - punto 3
 ---
-TITULO: <otro titulo>
-EXPLICACION: <explicacion>
+TITULO: <otro título>
+EXPLICACION: <explicación>
 - punto 1
 ---
 
 Entre 4 y 6 diapositivas. Sin asteriscos."""
 
-
 PROMPT_RESUMEN = """Resume el apunte muy breve.
 
 RESUMEN:
-<parrafo de 3 lineas>
+<párrafo de 3 líneas>
 CONCEPTOS:
 - <concepto>
 - <concepto>
@@ -128,90 +123,37 @@ PREGUNTAS:
 1. <pregunta>
 2. <pregunta>
 
-Maximo 200 palabras. Sin asteriscos."""
-
-
-PROMPT_ECUACIONES = """Analiza este apunte manuscrito. Si contiene ecuaciones,
-sistemas de ecuaciones o problemas matematicos, resolvelos paso a paso.
-
-Devuelve SOLO esto, con este formato exacto:
-
-TITULO: <titulo del tema>
-
-ECUACIONES ORIGINALES:
-<escribe las ecuaciones tal como aparecen en el apunte>
-
-METODO:
-<nombre del metodo: sustitucion, igualacion, reduccion, determinantes>
-
-PASOS:
-1. <paso 1 detallado>
-2. <paso 2 detallado>
-3. <paso 3 detallado>
-4. <los pasos necesarios>
-
-SOLUCION:
-<valores finales de las variables>
-
-VERIFICACION:
-<sustituye los valores en las ecuaciones originales y comprueba>
-
-Si el apunte NO contiene ecuaciones, devuelve solo: SIN_ECUACIONES
-
-Reglas:
-- Se claro y didactico.
-- No inventes datos que no esten en el apunte.
-- Sin asteriscos ni markdown."""
-
-
-PROMPT_EXCEL = """Analiza este apunte manuscrito. Extrae TODOS los datos que
-esten en formato tabular: tablas, listas con columnas, datos numericos
-organizados, inventarios, calificaciones, presupuestos.
-
-Devuelve SOLO los datos en formato CSV, con la primera fila como encabezados.
-
-Ejemplo:
-Producto,Cantidad,Precio
-Manzanas,10,2500
-Peras,5,3000
-
-Reglas:
-- Separador: coma
-- Sin comillas alrededor de los valores
-- Sin lineas vacias
-- Si un dato no esta claro, dejalo vacio
-- Si NO hay datos tabulares, devuelve solo: SIN_DATOS
-- NO agregues explicaciones ni texto adicional, solo el CSV"""
+Máximo 200 palabras. Sin asteriscos."""
 
 
 # ============ IA ============
 
 def _groq(b64, mime, prompt):
-    headers = {"Authorization": "Bearer " + GROQ_API_KEY}
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     payload = {
         "model": MODELO_GROQ,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + b64}},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
         ]}],
         "temperature": 0.2,
         "max_tokens": 900,
     }
     r = requests.post(URL_GROQ, headers=headers, json=payload, timeout=120)
     if r.status_code != 200:
-        raise RuntimeError("Groq " + str(r.status_code))
+        raise RuntimeError(f"Groq {r.status_code}")
     return r.json()["choices"][0]["message"]["content"]
 
 
 def _gemini(b64, mime, prompt):
-    url = URL_GEMINI + "?key=" + GEMINI_API_KEY
+    url = f"{URL_GEMINI}?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts": [
         {"text": prompt},
         {"inline_data": {"mime_type": mime, "data": b64}},
     ]}]}
     r = requests.post(url, json=payload, timeout=120)
     if r.status_code != 200:
-        raise RuntimeError("Gemini " + str(r.status_code))
+        raise RuntimeError(f"Gemini {r.status_code}")
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
@@ -221,12 +163,12 @@ def procesar(b64, mime, prompt):
         try:
             return _groq(b64, mime, prompt), "Groq"
         except Exception as e:
-            errores.append("Groq: " + str(e))
+            errores.append(f"Groq: {e}")
     if GEMINI_API_KEY:
         try:
             return _gemini(b64, mime, prompt), "Gemini"
         except Exception as e:
-            errores.append("Gemini: " + str(e))
+            errores.append(f"Gemini: {e}")
     raise RuntimeError(" | ".join(errores))
 
 
@@ -278,16 +220,6 @@ def docx_bytes(texto, titulo="Documento EscribIA"):
             doc.add_heading("Preguntas", level=1)
         elif up.startswith("RESUMEN:"):
             doc.add_heading("Resumen", level=1)
-        elif up.startswith("ECUACIONES ORIGINALES"):
-            doc.add_heading("Ecuaciones originales", level=1)
-        elif up.startswith("METODO") or up.startswith("MÉTODO"):
-            doc.add_heading("Método", level=1)
-        elif up.startswith("PASOS:"):
-            doc.add_heading("Pasos", level=1)
-        elif up.startswith("SOLUCION") or up.startswith("SOLUCIÓN"):
-            doc.add_heading("Solución", level=1)
-        elif up.startswith("VERIFICACION") or up.startswith("VERIFICACIÓN"):
-            doc.add_heading("Verificación", level=1)
         elif l.startswith("-"):
             doc.add_paragraph(l[1:].strip(), style="List Bullet")
         elif l[:2].strip().rstrip(".").isdigit():
@@ -296,55 +228,6 @@ def docx_bytes(texto, titulo="Documento EscribIA"):
             doc.add_paragraph(l)
     buf = io.BytesIO()
     doc.save(buf)
-    return buf.getvalue()
-
-
-# ============ EXCEL ============
-
-def excel_bytes(csv_texto):
-    import csv
-    from io import StringIO
-
-    if "SIN_DATOS" in csv_texto.upper():
-        raise ValueError("No se detectaron datos tabulares en el apunte.")
-
-    limpio = csv_texto.strip()
-    if limpio.startswith("```"):
-        lineas = limpio.split("\n")
-        lineas = [l for l in lineas if not l.strip().startswith("```")]
-        limpio = "\n".join(lineas)
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Datos"
-
-    reader = csv.reader(StringIO(limpio))
-    filas = 0
-    for fila in reader:
-        if fila and any(c.strip() for c in fila):
-            ws.append(fila)
-            filas += 1
-
-    if filas == 0:
-        raise ValueError("El CSV no contiene filas validas.")
-
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="1F4E78")
-
-    for col in ws.columns:
-        max_len = 0
-        letra = col[0].column_letter
-        for cell in col:
-            try:
-                if cell.value is not None:
-                    max_len = max(max_len, len(str(cell.value)))
-            except Exception:
-                pass
-        ws.column_dimensions[letra].width = min(max_len + 4, 40)
-
-    buf = io.BytesIO()
-    wb.save(buf)
     return buf.getvalue()
 
 
@@ -372,7 +255,7 @@ def parsear_slides(texto):
             else:
                 puntos.append(linea)
         if titulo or puntos:
-            slides.append((titulo or "Sin titulo", explicacion, puntos))
+            slides.append((titulo or "Sin título", explicacion, puntos))
     return slides
 
 
@@ -384,7 +267,7 @@ def pptx_bytes(texto):
 
     portada = prs.slides.add_slide(prs.slide_layouts[0])
     portada.shapes.title.text = "Apuntes digitalizados"
-    portada.placeholders[1].text = "EscribIA - " + datetime.now().strftime("%d/%m/%Y")
+    portada.placeholders[1].text = f"EscribIA - {datetime.now().strftime('%d/%m/%Y')}"
 
     for titulo, explicacion, puntos in slides:
         slide = prs.slides.add_slide(prs.slide_layouts[5])
@@ -421,7 +304,7 @@ def pptx_bytes(texto):
                     par = caja2.text_frame.paragraphs[0]
                 else:
                     par = caja2.text_frame.add_paragraph()
-                par.text = "•  " + pt
+                par.text = f"•  {pt}"
                 par.font.size = Pt(18)
 
     buf = io.BytesIO()
@@ -467,6 +350,7 @@ def guardar_conv(uid, tipo, texto):
 
 
 def obtener_perfil(uid):
+    """Devuelve dict con premium_until y premium_plan."""
     restaurar_sesion()
     try:
         r = supabase_client.table("profiles") \
@@ -478,6 +362,7 @@ def obtener_perfil(uid):
 
 
 def es_premium(perfil):
+    """Verifica si el premium está activo."""
     if not perfil or not perfil.get("premium_until"):
         return False
     try:
@@ -488,6 +373,7 @@ def es_premium(perfil):
 
 
 def activar_codigo(code):
+    """Llama a la función RPC de Supabase."""
     restaurar_sesion()
     try:
         resp = supabase_client.rpc("activar_codigo", {"p_code": code}).execute()
@@ -538,7 +424,7 @@ if st.session_state["user"] is None:
                     st.session_state["perfil_cache"] = None
                     st.rerun()
             except Exception as e:
-                st.error("Error: " + str(e))
+                st.error(f"Error: {e}")
 
     with tab2:
         st.caption("Mínimo 8 caracteres con mayúscula, minúscula, número y un símbolo.")
@@ -560,7 +446,7 @@ if st.session_state["user"] is None:
                     if resp.user:
                         st.success("✅ Cuenta creada. Revisa tu correo para confirmar.")
                 except Exception as e:
-                    st.error("Error: " + str(e))
+                    st.error(f"Error: {e}")
     st.stop()
 
 
@@ -571,6 +457,8 @@ email = st.session_state["user"]["email"]
 nombre = email.split("@")[0] if email else "Usuario"
 mes_actual = datetime.now().strftime("%Y-%m")
 
+
+# Cargar perfil y usos si no están en cache
 if st.session_state["perfil_cache"] is None:
     st.session_state["perfil_cache"] = obtener_perfil(uid)
 if st.session_state["usos_cache"] is None:
@@ -582,19 +470,19 @@ usos = st.session_state["usos_cache"]
 
 
 with st.sidebar:
-    st.markdown("### 👤 " + nombre)
+    st.markdown(f"### 👤 {nombre}")
     st.caption(email)
 
     if premium_activo:
         try:
             fecha = datetime.fromisoformat(perfil["premium_until"].replace("Z", "+00:00"))
-            st.success("⭐ **Premium activo**\n\nVence el " + fecha.strftime("%d/%m/%Y"))
+            st.success(f"⭐ **Premium activo**\n\nVence el {fecha.strftime('%d/%m/%Y')}")
         except Exception:
             st.success("⭐ **Premium activo**")
         st.caption("Uso ilimitado este mes")
     else:
         restantes = max(0, LIMITE_GRATUITO - usos)
-        st.caption("Plan gratuito: " + str(restantes) + "/" + str(LIMITE_GRATUITO) + " usos")
+        st.caption(f"Plan gratuito: {restantes}/{LIMITE_GRATUITO} usos")
         st.progress(min(usos / LIMITE_GRATUITO, 1.0))
 
     st.divider()
@@ -608,15 +496,14 @@ with st.sidebar:
                 if codigo_input:
                     with st.spinner("Validando..."):
                         resultado = activar_codigo(codigo_input)
-                    if resultado and resultado.get("success"):
-                        st.success(resultado.get("message", "Premium activado"))
+                    if resultado.get("success"):
+                        st.success(resultado.get("message", "¡Premium activado!"))
                         st.session_state["perfil_cache"] = None
                         st.session_state["usos_cache"] = None
                         st.balloons()
                         st.rerun()
                     else:
-                        msg = resultado.get("message", "Código inválido") if resultado else "Código inválido"
-                        st.error(msg)
+                        st.error(resultado.get("message", "Código inválido"))
                 else:
                     st.warning("Escribe un código.")
 
@@ -641,10 +528,82 @@ st.divider()
 
 formato = st.radio(
     "¿Qué quieres generar?",
-    [
-        "📝 Solo lo anotado",
-        "📚 Documento completo de estudio",
-        "📊 Presentación PowerPoint",
-        "📄 Resumen corto",
-        "🧮 Resolver ecuaciones",
- 
+    ["📝 Solo lo anotado", "📚 Documento completo de estudio",
+     "📊 Presentación PowerPoint", "📄 Resumen corto"],
+)
+
+foto = st.file_uploader("Sube o toma la foto del apunte",
+                          type=["jpg", "jpeg", "png", "webp"])
+
+if foto:
+    img = Image.open(foto)
+    st.image(img, caption="Apunte cargado", use_container_width=True)
+
+    if st.button("✨ Procesar con IA", type="primary", use_container_width=True):
+        # Solo verificar límite si NO es premium
+        if not premium_activo:
+            usos_act = st.session_state["usos_cache"] or 0
+            if usos_act >= LIMITE_GRATUITO:
+                st.error(
+                    f"🚫 Alcanzaste tus {LIMITE_GRATUITO} usos gratuitos. "
+                    f"Activa Premium para uso ilimitado."
+                )
+                st.stop()
+        else:
+            usos_act = 0
+
+        # Preparar imagen
+        img.thumbnail((1600, 1600))
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, "JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        # Elegir prompt
+        if "Documento completo" in formato:
+            prompt, tipo = PROMPT_COMPLETO, "full_doc"
+        elif "Solo lo anotado" in formato:
+            prompt, tipo = PROMPT_WORD, "word"
+        elif "PowerPoint" in formato:
+            prompt, tipo = PROMPT_PPT, "ppt"
+        else:
+            prompt, tipo = PROMPT_RESUMEN, "summary"
+
+        with st.spinner("Procesando..."):
+            try:
+                texto, prov = procesar(b64, "image/jpeg", prompt)
+            except Exception as e:
+                st.error(f"Error: {e}")
+                st.stop()
+
+        # Registrar uso solo si NO es premium
+        if not premium_activo:
+            sumar_uso(uid, mes_actual, usos_act)
+            st.session_state["usos_cache"] = usos_act + 1
+
+        guardar_conv(uid, tipo, texto)
+
+        st.success(f"✅ Procesado con {prov}")
+        st.text_area("Resultado", texto, height=300)
+
+        # Generar archivo
+        if "Documento completo" in formato:
+            datos = docx_bytes(texto, "Documento de estudio")
+            nombre_arch = f"escribia_doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            mime_dl = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif "Solo lo anotado" in formato:
+            datos = docx_bytes(texto, "Apunte transcrito")
+            nombre_arch = f"escribia_apunte_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            mime_dl = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif "PowerPoint" in formato:
+            with st.spinner("Buscando imágenes..."):
+                datos = pptx_bytes(texto)
+            nombre_arch = f"escribia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+            mime_dl = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        else:
+            datos = docx_bytes(texto, "Resumen de estudio")
+            nombre_arch = f"escribia_resumen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            mime_dl = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        st.download_button("⬇️ Descargar archivo", data=datos,
+                            file_name=nombre_arch, mime=mime_dl,
+                            type="primary", use_container_width=True)
