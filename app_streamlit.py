@@ -2,7 +2,7 @@
 EscribIA - Versión web unificada con autenticación y base de datos.
 
 Incluye:
-  - Login y registro con Supabase
+  - Login y registro con Supabase (usando st-login-form)
   - 4 formatos: Solo lo anotado, Documento completo, PowerPoint, Resumen
   - Contador de usos mensuales (plan freemium, límite 7)
   - Doble proveedor de IA: Groq (principal) + Gemini (respaldo)
@@ -20,7 +20,7 @@ from docx import Document
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from supabase import create_client
-from st_login_form import login_form, logout
+from st_login_form import login_form
 
 
 # ============ LECTURA DE CLAVES ============
@@ -422,12 +422,13 @@ def guardar_conversion(user_id, source_type, texto):
         pass
 
 
-# ============ INTERFAZ PRINCIPAL ============
+# ============ CONFIGURACIÓN DE PÁGINA ============
 
 st.set_page_config(page_title="EscribIA", page_icon="📝", layout="centered")
 
 
-# --- Verificar autenticación ---
+# ============ AUTENTICACIÓN ============
+
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -436,23 +437,23 @@ if not st.session_state.get("authenticated", False):
     st.caption("Apuntes escritos a mano, convertidos en documentos digitales con IA")
     st.divider()
 
+    # st-login-form lee SUPABASE_URL y SUPABASE_KEY de los Secrets
+    # automáticamente. No hay que pasarle el cliente.
     login_form(
-        supabase_connection=supabase_client,
         title="Inicia sesión o crea tu cuenta",
         user_tablename="profiles",
     )
 
-    # Si tras el formulario el usuario quedó autenticado, recargar
     if st.session_state.get("authenticated", False):
         st.rerun()
     st.stop()
 
 
-# --- Usuario autenticado ---
+# ============ USUARIO AUTENTICADO ============
+
 user_id = st.session_state.get("user_id")
 username = st.session_state.get("username", "Usuario")
 
-# Barra lateral con info del usuario
 with st.sidebar:
     st.markdown(f"### 👤 {username}")
     mes_actual = datetime.now().strftime("%Y-%m")
@@ -462,10 +463,14 @@ with st.sidebar:
     st.progress(min(usos / LIMITE_GRATUITO, 1.0))
     st.divider()
     if st.button("🚪 Cerrar sesión", use_container_width=True):
-        logout()
+        st.session_state["authenticated"] = False
+        st.session_state.pop("user_id", None)
+        st.session_state.pop("username", None)
+        st.rerun()
 
 
-# --- Interfaz principal ---
+# ============ INTERFAZ PRINCIPAL ============
+
 st.title("📝 EscribIA")
 st.caption("Apuntes escritos a mano, convertidos en documentos digitales con IA")
 st.divider()
@@ -573,4 +578,4 @@ if foto:
             mime=mime_dl,
             type="primary",
             use_container_width=True,
-          )
+              )
