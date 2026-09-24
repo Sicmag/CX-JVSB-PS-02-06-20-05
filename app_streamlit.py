@@ -65,7 +65,7 @@ URL_GEMINI = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{MODELO_GEMINI}:generateContent"
 )
-URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
+MODELO_GROQ = "qwen/qwen3.8-27b"
 
 
 # --- Prompts por tipo de salida ---
