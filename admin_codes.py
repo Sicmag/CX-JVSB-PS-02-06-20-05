@@ -1,7 +1,7 @@
-
 """
 EscribIA Admin - Generador de códigos premium
 Panel privado para generar, ver y exportar códigos de activación.
+Permite definir duración en días (1-365) y horas (0-23).
 """
 
 import random
@@ -13,7 +13,7 @@ import streamlit as st
 from supabase import create_client
 
 
-# ============ CONFIGURACIÓN DE PÁGINA (DEBE SER LO PRIMERO) ============
+# ============ CONFIGURACIÓN DE PÁGINA ============
 
 st.set_page_config(page_title="EscribIA Admin", page_icon="🔑", layout="wide")
 
@@ -47,6 +47,15 @@ st.markdown("""
         border-radius: 10px;
         margin: 1rem 0;
         font-weight: 600;
+    }
+    .preview-box {
+        background: #eef2ff;
+        border: 2px solid #667eea;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        color: #3730a3;
+        font-weight: 600;
+        margin: 0.5rem 0 1rem 0;
     }
     .stButton > button { border-radius: 8px; font-weight: 600; }
 </style>
@@ -125,15 +134,38 @@ def generar_codigo():
     return f"ESCRIBIA-{p1}-{p2}"
 
 
-def generar_lote(cantidad, plan_type, duration_days):
+def nombre_plan(dias, horas):
+    """Genera el identificador del plan según días y horas."""
+    if horas > 0:
+        return f"premium_{dias}d_{horas}h"
+    return f"premium_{dias}d"
+
+
+def texto_duracion(dias, horas):
+    """Texto legible: '2 días y 5 horas'."""
+    partes = []
+    if dias > 0:
+        partes.append(f"{dias} día{'s' if dias != 1 else ''}")
+    if horas > 0:
+        partes.append(f"{horas} hora{'s' if horas != 1 else ''}")
+    return " y ".join(partes) if partes else "0"
+
+
+def generar_lote(cantidad, dias, horas):
     codigos = []
     intentos = 0
     while len(codigos) < cantidad and intentos < cantidad * 3:
         codigos.append(generar_codigo())
         intentos += 1
 
-    data = [{"code": c, "plan_type": plan_type, "duration_days": duration_days}
-            for c in codigos]
+    plan = nombre_plan(dias, horas)
+    data = [{
+        "code": c,
+        "plan_type": plan,
+        "duration_days": dias,
+        "duration_hours": horas,
+    } for c in codigos]
+
     try:
         resp = admin_client.table("activation_codes").insert(data).execute()
         return resp.data or [], None
@@ -203,6 +235,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ============ GENERADOR ============
 
 st.subheader("🎯 Generar nuevo lote de códigos")
+st.caption("Configura la duración exacta del premium: días y/o horas.")
 
 col_izq, col_der = st.columns([2, 1])
 
@@ -210,34 +243,52 @@ with col_izq:
     with st.form("generar"):
         c1, c2, c3 = st.columns(3)
         with c1:
-            cantidad = st.number_input("Cantidad", min_value=1, max_value=200, value=10, step=5)
+            cantidad = st.number_input(
+                "Cantidad de códigos",
+                min_value=1, max_value=200, value=5, step=1,
+            )
         with c2:
-            plan = st.selectbox("Plan", [
-                ("premium_30", "Premium 30 días"),
-                ("premium_90", "Premium 90 días"),
-                ("premium_365", "Premium 1 año"),
-            ], format_func=lambda x: x[1])
+            dias = st.number_input(
+                "Días (1 - 365)",
+                min_value=1, max_value=365, value=30, step=1,
+            )
         with c3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            generar = st.form_submit_button("⚡ Generar", use_container_width=True, type="primary")
+            horas = st.number_input(
+                "Horas (0 - 23)",
+                min_value=0, max_value=23, value=0, step=1,
+                help="0 = solo días. Suma horas extra al vencimiento.",
+            )
+
+        st.markdown(
+            f'<div class="preview-box">⏱️ Duración por código: {texto_duracion(dias, horas)}</div>',
+            unsafe_allow_html=True,
+        )
+
+        generar = st.form_submit_button(
+            "⚡ Generar códigos",
+            use_container_width=True,
+            type="primary",
+        )
 
     if generar:
         with st.spinner(f"Generando {cantidad} códigos..."):
-            nuevos, error = generar_lote(cantidad, plan[0], int(plan[0].split("_")[1]))
+            nuevos, error = generar_lote(cantidad, int(dias), int(horas))
         if error:
             st.error(f"Error: {error}")
         elif nuevos:
             st.markdown(
-                f'<div class="success-banner">✅ {len(nuevos)} códigos generados correctamente</div>',
-                unsafe_allow_html=True
+                f'<div class="success-banner">✅ {len(nuevos)} códigos generados ({texto_duracion(dias, horas)})</div>',
+                unsafe_allow_html=True,
             )
-            st.markdown("**Códigos generados:**")
+            st.markdown("**Primeros códigos generados:**")
             for c in nuevos[:5]:
                 st.code(c["code"], language=None)
             if len(nuevos) > 5:
                 st.caption(f"... y {len(nuevos)-5} más")
 
-            df_nuevos = pd.DataFrame(nuevos)[["code", "plan_type", "duration_days"]]
+            df_nuevos = pd.DataFrame(nuevos)[
+                ["code", "plan_type", "duration_days", "duration_hours"]
+            ]
             csv = df_nuevos.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "📥 Descargar lote como CSV",
@@ -249,12 +300,22 @@ with col_izq:
 
 with col_der:
     st.markdown("""
-    <div style="background:#f9fafb;padding:1rem;border-radius:10px;height:100%;">
-    <p style="font-weight:700;margin:0 0 0.5rem 0;">💡 Cómo venderlos</p>
+    <div style="background:#f9fafb;padding:1rem;border-radius:10px;">
+    <p style="font-weight:700;margin:0 0 0.5rem 0;">💡 Ejemplos de uso</p>
+    <p style="font-size:0.85rem;color:#4b5563;margin:0 0 0.5rem 0;">
+    • <b>1 día, 0 horas</b> → prueba rápida<br>
+    • <b>7 días, 0 horas</b> → semana<br>
+    • <b>30 días, 0 horas</b> → mes<br>
+    • <b>365 días, 0 horas</b> → año completo<br>
+    • <b>0? no, mínimo 1 día</b> — usa horas si quieres menos<br>
+    • <b>1 día, 12 horas</b> → día y medio
+    </p>
+    <p style="font-weight:700;margin:0.75rem 0 0.5rem 0;">💰 Precios sugeridos</p>
     <p style="font-size:0.85rem;color:#4b5563;margin:0;">
-    • Precio sugerido: <b>$19.900 COP</b> por 30 días<br>
-    • Método: Nequi, Daviplata o Bancolombia<br>
-    • Entrega: enviar el código por WhatsApp
+    • 1 hora → $1.000 COP<br>
+    • 1 día → $3.900 COP<br>
+    • 30 días → $19.900 COP<br>
+    • 365 días → $149.000 COP
     </p>
     </div>
     """, unsafe_allow_html=True)
@@ -270,7 +331,9 @@ st.subheader("📋 Códigos existentes")
 if not codigos:
     st.info("Aún no has generado ningún código.")
 else:
-    filtro = st.radio("Filtrar:", ["Todos", "Solo disponibles", "Solo usados"], horizontal=True)
+    filtro = st.radio(
+        "Filtrar:", ["Todos", "Solo disponibles", "Solo usados"], horizontal=True
+    )
 
     lista = codigos
     if filtro == "Solo disponibles":
@@ -280,10 +343,14 @@ else:
 
     lista = sorted(lista, key=lambda x: x.get("created_at") or "", reverse=True)
 
+    def duracion_legible(c):
+        d = c.get("duration_days", 0) or 0
+        h = c.get("duration_hours", 0) or 0
+        return texto_duracion(d, h)
+
     df = pd.DataFrame([{
         "Código": c["code"],
-        "Plan": c.get("plan_type", ""),
-        "Días": c.get("duration_days", ""),
+        "Duración": duracion_legible(c),
         "Estado": "✅ Usado" if c.get("used") else "🟢 Disponible",
         "Creado": (c.get("created_at") or "")[:10],
         "Usado el": (c.get("used_at") or "")[:10] if c.get("used") else "—",
